@@ -8,11 +8,7 @@ import random
 from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-try:
-    from backtest_v81 import backtest_gold_v81
-    BACKTEST_AVAILABLE=True
-except:
-    BACKTEST_AVAILABLE=False
+BACKTEST_AVAILABLE=False
 
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -532,29 +528,6 @@ async def sweep_cmd(update, context):
     msg = f"🧹 SIDE SWEEP SCAN (MT5 Price Action)\n💰 ${data['price']:.2f}\n\n1H Sweep: {data['sweep_1h']['desc']}\nLevel: {data['sweep_1h']['level']:.2f} Extreme: {data['sweep_1h']['extreme']:.2f}\nType: {data['sweep_1h']['type']}\n\n15M Sweep: {data['sweep_15m']['desc']}\nLevel: {data['sweep_15m']['level']:.2f} Extreme: {data['sweep_15m']['extreme']:.2f}\nType: {data['sweep_15m']['type']}\n\nSetup: Wait for Sweep + CHoCH + BOS\nSL: Below sweep extreme + ATR buffer"
     await update.message.reply_text(msg)
 
-async def backtest_cmd(update, context):
-    await update.message.reply_text("⏳ Running V8.1 Side Sweep Backtest on 500x 1H candles... Takes 15-20 sec (needs TWELVE_DATA_API_KEY).")
-    try:
-        from backtest_v81 import backtest_gold_v81
-        result = backtest_gold_v81()
-        if "error" in result:
-            await update.message.reply_text(f"❌ Backtest error: {result['error']}\nSet TWELVE_DATA_API_KEY in Render env.")
-            return
-        msg = f"📊 GOLD V8.1 SIDE SWEEP BACKTEST\\n"
-        msg += f"Period: Last 500x 1H (~3 weeks)\\n"
-        msg += f"Strategy: Sweep + CHoCH->HL/BOS + 4H Trend + Structure SL/TP\\n\\n"
-        msg += f"Total Trades: {result['total_trades']}\\n"
-        msg += f"✅ Wins: {result['wins']} | ❌ Losses: {result['losses']}\\n"
-        msg += f"🏆 Winrate: {result['winrate']:.1f}%\\n"
-        msg += f"💰 Total Profit: ${result['total_profit_dollars']:.1f}\\n"
-        msg += f"📈 Avg/Trade: ${result['avg_profit_per_trade']:.2f}\\n\\n"
-        for t in result['trades'][-5:]:
-            msg += f"{t['datetime']} {t['direction']} {t['result']} P:${t['profit']:.1f}\\n"
-        msg += f"\\nPrice Action: MT5 Equal Highs/Lows Sweep"
-        await update.message.reply_text(msg)
-    except Exception as e:
-        await update.message.reply_text(f"❌ Backtest failed: {e}")
-
 async def news(update, context):
     data = get_gold_multitimeframe()
     await update.message.reply_text(f"📰 MARKET ANALYSIS V8.1 SWEEP\n💰 Gold ${data['price']:.2f}\nUS10Y {data['yield']:.2f}%\nDXY {data['dxy']:.2f}\nRSI 15M {data['rsi_15m']:.1f} 1H {data['rsi_1h']:.1f} 4H {data['rsi_4h']:.1f}\n\n4H Trend: {data['struct_4h']['pattern']}\n1H CHoCH: {data['bos_choch_1h']['choch']}\n1H Sweep: {data['sweep_1h']['desc']}\n15M Sweep: {data['sweep_15m']['desc']}\n15M BOS: {data['bos_choch_15m']['bos']}\n\nRule: Side Sweep = Liquidity Grab -> Reversal")
@@ -643,7 +616,6 @@ def main():
     app.add_handler(CommandHandler("autostop", autostop))
     app.add_handler(CommandHandler("autopilot_on", autopilot_on_alias))
     app.add_handler(CommandHandler("autopilot_off", autopilot_off_alias))
-    app.add_handler(CommandHandler("backtest", backtest_cmd))
     app.add_handler(CommandHandler("news", news))
     app.add_handler(CommandHandler("sendvip", sendvip))
     app.add_handler(CommandHandler("setchannel", setchannel))
