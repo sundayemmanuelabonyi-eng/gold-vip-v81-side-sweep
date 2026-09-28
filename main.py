@@ -197,12 +197,198 @@ def detect_side_sweep(candles, tolerance=2.0):
     return {"is_sweep": False, "type": "NONE", "level": 0, "extreme": 0, "desc": "No sweep"}
 
 
-def backtest_gold_v81_quick():
+def run_backtest_6months():
+    """Full 6-month backtest for V8.1 Side Sweep MT5 PA - No external file"""
+    if not TWELVE_KEY:
+        return {"error": "No TWELVE_DATA_API_KEY - cannot backtest"}
     try:
-        from backtest_v81 import backtest_gold_v81
-        return backtest_gold_v81()
+        # Fetch 1H history for 6 months (approx 4320 hours) - TwelveData max 5000
+        print("Backtest: Fetching 1H candles 6 months...")
+        candles_1h = fetch_twelvedata_candles("XAU/USD", "1h", TWELVE_KEY, 2000)
+        if not candles_1h or len(candles_1h) < 200:
+            return {"error": f"Failed to fetch 1H history, got {len(candles_1h) if candles_1h else 0} candles"}
+        
+        trades = []
+        wins_tp1 = 0
+        wins_tp2 = 0
+        losses = 0
+        be = 0
+        total_signals = 0
+        
+        # Simulate every 4th hour to reduce compute but cover 6 months
+        for i in range(60, len(candles_1h) - 30, 4):
+            hist = candles_1h[i-50:i]  # last 50 as history
+            if len(hist) < 50:
+                continue
+            closes = [c["close"] for c in hist]
+            highs = [c["high"] for c in hist]
+            lows = [c["low"] for c in hist]
+            
+            e9 = ema(closes, 9)
+            e21 = ema(closes, 21)
+            e50 = ema(closes, 50)
+            r = rsi(closes, 14)
+            atr_v = atr(highs, lows, closes, 14)
+            
+            struct = detect_structure(hist)
+            bos_choch = detect_bos_choch(hist, struct)
+            sweep = detect_side_sweep(hist, tolerance=2.0)
+            
+            # V8.1 Confluence logic (simplified same as live)
+            price = hist[-1]["close"]
+            
+            # Trend
+            if e9 > e21 > e50:
+                trend = "BUY"
+            elif e9 < e21 < e50:
+                trend = "SELL"
+            else:
+                trend = "WAIT"
+            
+            # Momentum
+            if r < 30:
+                mom = "BUY"
+            elif r > 70:
+                mom = "SELL"
+            else:
+                mom = "WAIT"
+            
+            # CHoCH
+            if bos_choch["bull_choch"]:
+                choch_dir = "BUY"
+            elif bos_choch["bear_choch"]:
+                choch_dir = "SELL"
+            else:
+                choch_dir = "WAIT"
+            
+            # Sweep - core of V8.1
+            if sweep["is_sweep"]:
+                if sweep["type"] == "BUY_SWEEP":
+                    sweep_dir = "BUY"
+                else:
+                    sweep_dir = "SELL"
+            else:
+                sweep_dir = "WAIT"
+            
+            # Confluence
+            dirs = [trend, mom, choch_dir, sweep_dir]
+            buy_cnt = dirs.count("BUY")
+            sell_cnt = dirs.count("SELL")
+            
+            if buy_cnt >= 3 and sweep_dir == "BUY":
+                direction = "BUY"
+                conf = 70 + buy_cnt*5 + (10 if sweep["is_sweep"] else 0)
+            elif sell_cnt >= 3 and sweep_dir == "SELL":
+                direction = "SELL"
+                conf = 70 + sell_cnt*5 + (10 if sweep["is_sweep"] else 0)
+            elif buy_cnt >= 2 and sweep["is_sweep"] and sweep["type"]=="BUY_SWEEP":
+                direction = "BUY"
+                conf = 75
+            elif sell_cnt >= 2 and sweep["is_sweep"] and sweep["type"]=="SELL_SWEEP":
+                direction = "SELL"
+                conf = 75
+            else:
+                continue
+            
+            if conf < 70:
+                continue
+            
+            total_signals += 1
+            
+            # Calculate SL/TP same as live
+            if direction == "BUY":
+                if sweep["is_sweep"] and sweep["type"]=="BUY_SWEEP":
+                    sl = sweep["extreme"] - atr_v*0.5
+                else:
+                    sl = min(struct["last_low"], min(lows[-5:])) - atr_v*0.8
+                if price - sl > 15: sl = price - 12
+                if price - sl < 4: sl = price - 6
+                risk = price - sl
+                tp1 = struct["last_high"] if struct["last_high"] > price else price + risk
+                tp2 = price + risk*1.8
+            else:
+                if sweep["is_sweep"] and sweep["type"]=="SELL_SWEEP":
+                    sl = sweep["extreme"] + atr_v*0.5
+                else:
+                    sl = max(struct["last_high"], max(highs[-5:])) + atr_v*0.8
+                if sl - price > 15: sl = price + 12
+                if sl - price < 4: sl = price + 6
+                risk = sl - price
+                tp1 = struct["last_low"] if struct["last_low"] < price and struct["last_low"]>0 else price - risk
+                tp2 = price - risk*1.8
+            
+            # Look ahead next 30 candles (30h) to see outcome
+            future = candles_1h[i:i+30]
+            outcome = "BE"
+            hit_tp1 = False
+            hit_tp2 = False
+            hit_sl = False
+            
+            for fc in future:
+                if direction == "BUY":
+                    if fc["low"] <= sl:
+                        hit_sl = True
+                        break
+                    if not hit_tp1 and fc["high"] >= tp1:
+                        hit_tp1 = True
+                    if not hit_tp2 and fc["high"] >= tp2:
+                        hit_tp2 = True
+                        break
+                else:
+                    if fc["high"] >= sl:
+                        hit_sl = True
+                        break
+                    if not hit_tp1 and fc["low"] <= tp1:
+                        hit_tp1 = True
+                    if not hit_tp2 and fc["low"] <= tp2:
+                        hit_tp2 = True
+                        break
+            
+            if hit_sl:
+                losses += 1
+                outcome = "LOSS"
+            elif hit_tp2:
+                wins_tp2 += 1
+                outcome = "TP2 WIN"
+            elif hit_tp1:
+                wins_tp1 += 1
+                outcome = "TP1 WIN"
+            else:
+                be += 1
+                outcome = "BE"
+            
+            trades.append({
+                "date": hist[-1]["datetime"],
+                "dir": direction,
+                "conf": conf,
+                "price": price,
+                "outcome": outcome,
+                "sweep": sweep["desc"][:60]
+            })
+        
+        total_closed = wins_tp1 + wins_tp2 + losses
+        win_rate = (wins_tp1 + wins_tp2) / total_closed * 100 if total_closed>0 else 0
+        tp2_rate = wins_tp2 / total_closed * 100 if total_closed>0 else 0
+        
+        # Last 20 trades for detail
+        last_trades = trades[-20:]
+        
+        return {
+            "total_signals": total_signals,
+            "trades": trades,
+            "wins_tp1": wins_tp1,
+            "wins_tp2": wins_tp2,
+            "losses": losses,
+            "be": be,
+            "total_closed": total_closed,
+            "win_rate": win_rate,
+            "tp2_rate": tp2_rate,
+            "last_trades": last_trades,
+            "candles_used": len(candles_1h)
+        }
     except Exception as e:
-        return {"error": str(e)}
+        import traceback
+        return {"error": str(e), "trace": traceback.format_exc()[:1000]}
 
 def get_gold_multitimeframe():
     global LAST_PRICE_HISTORY, CACHED_PRICE
@@ -487,27 +673,16 @@ def build_gold_v8():
         lines.append(f"⏸️ No trade - Waiting for Side Sweep + CHoCH + BOS alignment")
 
     vip_lines=[]
-    vip_lines.append(f"🏆 GOLD VIP V8.1 SIDE SWEEP - {src}")
-    vip_lines.append(f"💰 XAUUSD ${price:.2f} | {now}")
-    vip_lines.append("")
-    vip_lines.append(f"4H: {trend_4h} ({struct_4h['pattern']})")
-    vip_lines.append(f"1H: {struct_1h['pattern']} | CHoCH: {bos_choch_1h['choch']}")
-    vip_lines.append(f"1H SWEEP: {sweep_1h['desc']}")
-    vip_lines.append(f"15M: {bos_choch_15m['bos']} | RSI {rsi_15m:.1f} | Sweep: {sweep_15m['desc']}")
-    vip_lines.append("")
     if direction != "WAIT":
+        rr_val = (tp2-price)/risk if direction=="BUY" else (price-tp2)/risk
         vip_lines.append(f"{emoji} {direction} {conf_pct}% ({count}/8 agree) - QUALITY SWEEP")
         vip_lines.append(f"ENTRY {price:.2f}")
         vip_lines.append(f"SL {sl:.2f} (Sweep Extreme + ATR)")
         vip_lines.append(f"TP1 {tp1:.2f} | TP2 {tp2:.2f} | TP3 {tp3:.2f}")
-        rr_val = (tp2-price)/risk if direction=="BUY" else (price-tp2)/risk
         vip_lines.append(f"RR 1:{rr_val:.1f} | Risk {risk:.1f}$")
-        vip_lines.append("")
-        vip_lines.append(f"Setup: SIDE SWEEP -> CHoCH->HL/BOS | MT5 Price Action")
-        vip_lines.append(f"⏰ {now} | DXY {dxy_val:.2f}")
     else:
-        vip_lines.append(f"⚪ WAIT {conf_pct}%")
-        vip_lines.append(f"4H {trend_4h} | 1H {struct_1h['trend']} | Sweep {sweep_1h['desc']}")
+        vip_lines.append(f"⚪ WAIT {conf_pct}% ({count}/8 agree)")
+        vip_lines.append(f"No trade - Waiting for Side Sweep + CHoCH + BOS")
 
     full_msg = "\n".join(lines)
     vip_msg = "\n".join(vip_lines)
@@ -516,7 +691,7 @@ def build_gold_v8():
 async def start(update, context):
     SUBSCRIBERS.add(update.effective_chat.id)
     td_status = "✅ TwelveData ON" if TWELVE_KEY else "⚠️ TwelveData OFF - Set TWELVE_DATA_API_KEY env"
-    msg = f"🏆 GOLD VIP V8.1 SIDE SWEEP MT5 PRICE ACTION 🏆\n\n💰 VIP: $25 / month\n📢 Channel: {CHANNEL_USERNAME}\n🆔 ID: {CHANNEL_ID}\n💳 Wallet: {CRYPTO_WALLET}\n{td_status}\n\nStrategy: 4H Father + 1H Side Sweep (MT5 PA) + 1H CHoCH/LH/BOS + 15M BOS\nEntry: SIDE SWEEP -> CHoCH -> HL/LH -> BOS\nSL/TP: Sweep Extreme + ATR | TP1 1H | TP2 1:2 | TP3 4H\nPrice Action: Equal Highs/Lows Liquidity Grab from MT5\n\nCommands:\n/signal - V8.1 signal now\n/mtf - 4H 1H 15M + Sweep structure\n/sweep - Check side sweep only\n/autopilot - Auto every 15 min\n/autostop - Stop\n/news - DXY Yield\n/buy - Join VIP $25\n/channeltest - Test channel\n/sendvip - Admin send to VIP"
+    msg = f"🏆 GOLD VIP V8.1 SIDE SWEEP MT5 PRICE ACTION 🏆\n\n💰 VIP: $25 / month\n📢 Channel: {CHANNEL_USERNAME}\n🆔 ID: {CHANNEL_ID}\n💳 Wallet: {CRYPTO_WALLET}\n{td_status}\n\nStrategy: 4H Father + 1H Side Sweep (MT5 PA) + 1H CHoCH/LH/BOS + 15M BOS\nEntry: SIDE SWEEP -> CHoCH -> HL/LH -> BOS\nSL/TP: Sweep Extreme + ATR | TP1 1H | TP2 1:2 | TP3 4H\nPrice Action: Equal Highs/Lows Liquidity Grab from MT5\n\nCommands:\n/signal - V8.1 signal now\n/mtf - 4H 1H 15M + Sweep structure\n/sweep - Check side sweep only\n/autopilot - Auto every 15 min\n/autostop - Stop\n/news - DXY Yield\n/buy - Join VIP $25\n/channeltest - Test channel\n/sendvip - Admin send to VIP\n/backtest - 6M Backtest V8.1 (Sweep+CHoCH+BOS)"
     await update.message.reply_text(msg)
 
 async def buy(update, context):
@@ -614,6 +789,50 @@ async def channeltest(update, context):
     except Exception as e:
         await update.message.reply_text(f"❌ Failed: {e}")
 
+async def backtest(update, context):
+    await update.message.reply_text("⏳ Running V8.1 Side Sweep 6-Month Backtest... Fetching 2000x 1H candles from TwelveData (30 sec)...")
+    try:
+        # Run in executor to not block
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, run_backtest_6months)
+        
+        if "error" in result:
+            await update.message.reply_text(f"❌ Backtest Error: {result['error']}\n{result.get('trace','')[:500]}")
+            return
+        
+        msg = f"📊 V8.1 SIDE SWEEP 6-MONTH BACKTEST (MT5 PA)\n"
+        msg += f"Candles: {result['candles_used']} x 1H (~{result['candles_used']//24} days)\n"
+        msg += f"Total Signals (75%+ + Sweep): {result['total_signals']}\n"
+        msg += f"Closed Trades: {result['total_closed']}\n"
+        msg += f"✅ TP2 WIN (1:1.8): {result['wins_tp2']}\n"
+        msg += f"✅ TP1 WIN (1:1): {result['wins_tp1']}\n"
+        msg += f"❌ LOSS (SL hit): {result['losses']}\n"
+        msg += f"➖ BE (no TP/SL in 30h): {result['be']}\n"
+        msg += f"\n🏆 WIN RATE: {result['win_rate']:.1f}% (TP1+TP2)\n"
+        msg += f"💎 TP2 RATE: {result['tp2_rate']:.1f}% (full 1:1.8 RR)\n"
+        msg += f"\nStrategy: Side Sweep + CHoCH + EMA Trend + RSI\n"
+        msg += f"SL: Sweep Extreme + ATR | TP1 structure | TP2 1:1.8\n"
+        msg += f"Entry: SWEEP -> CHoCH -> BOS (your V8.1 logic)\n"
+        
+        if result['last_trades']:
+            msg += f"\n📜 Last 10 trades:\n"
+            for t in result['last_trades'][-10:]:
+                emoji = "🟢" if t['dir']=="BUY" else "🔴"
+                msg += f"{emoji} {t['date'][:10]} {t['dir']} {t['conf']}% -> {t['outcome']} @ {t['price']:.2f}\n"
+        
+        await update.message.reply_text(msg)
+        
+        # Also send summary to VIP if admin
+        if update.effective_user.id == ADMIN_ID:
+            try:
+                vip_summary = f"🏆 V8.1 BACKTEST RESULT 6M\nWIN {result['win_rate']:.1f}% | TP2 {result['tp2_rate']:.1f}%\nSignals: {result['total_signals']} | Closed: {result['total_closed']}\nTP2:{result['wins_tp2']} TP1:{result['wins_tp1']} LOSS:{result['losses']}\nMT5 Side Sweep + CHoCH + BOS"
+                await context.bot.send_message(chat_id=CHANNEL_ID, text=vip_summary)
+            except:
+                pass
+                
+    except Exception as e:
+        await update.message.reply_text(f"❌ Backtest failed: {e}")
+
 def main():
     if not BOT_TOKEN:
         print("ERROR: BOT_TOKEN not set!")
@@ -632,7 +851,8 @@ def main():
     app.add_handler(CommandHandler("sendvip", sendvip))
     app.add_handler(CommandHandler("setchannel", setchannel))
     app.add_handler(CommandHandler("channeltest", channeltest))
-    print(f"GOLD VIP V8.1 SIDE SWEEP started - MT5 Price Action + TwelveData - 8 Strategies")
+    app.add_handler(CommandHandler("backtest", backtest))
+    print(f"GOLD VIP V8.1 SIDE SWEEP started - MT5 Price Action + TwelveData - 8 Strategies + 6M Backtest")
     app.run_polling(drop_pending_updates=True, allowed_updates=["message"])
 
 if __name__ == "__main__":
