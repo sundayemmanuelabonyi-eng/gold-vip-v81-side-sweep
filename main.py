@@ -8,7 +8,6 @@ import random
 from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-BACKTEST_AVAILABLE=False
 
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -270,55 +269,59 @@ def run_backtest_6months():
             else:
                 sweep_dir = "WAIT"
             
-            # Confluence
+            # Confluence - V8.2 IMPROVED: Require 4H alignment + RSI filter
+            # RSI filter: Don't BUY if RSI >65, Don't SELL if RSI <35 (avoid chasing)
+            if (r > 65 and sweep_dir == "BUY") or (r < 35 and sweep_dir == "SELL"):
+                continue
+            
             dirs = [trend, mom, choch_dir, sweep_dir]
             buy_cnt = dirs.count("BUY")
             sell_cnt = dirs.count("SELL")
             
             if buy_cnt >= 3 and sweep_dir == "BUY":
                 direction = "BUY"
-                conf = 70 + buy_cnt*5 + (10 if sweep["is_sweep"] else 0)
+                conf = 75 + buy_cnt*5 + (10 if sweep["is_sweep"] else 0)
             elif sell_cnt >= 3 and sweep_dir == "SELL":
                 direction = "SELL"
-                conf = 70 + sell_cnt*5 + (10 if sweep["is_sweep"] else 0)
-            elif buy_cnt >= 2 and sweep["is_sweep"] and sweep["type"]=="BUY_SWEEP":
+                conf = 75 + sell_cnt*5 + (10 if sweep["is_sweep"] else 0)
+            elif buy_cnt >= 2 and sweep["is_sweep"] and sweep["type"]=="BUY_SWEEP" and trend=="BUY":
                 direction = "BUY"
-                conf = 75
-            elif sell_cnt >= 2 and sweep["is_sweep"] and sweep["type"]=="SELL_SWEEP":
+                conf = 80
+            elif sell_cnt >= 2 and sweep["is_sweep"] and sweep["type"]=="SELL_SWEEP" and trend=="SELL":
                 direction = "SELL"
-                conf = 75
+                conf = 80
             else:
                 continue
             
-            if conf < 70:
+            if conf < 75:  # V8.2: Higher threshold 75%
                 continue
             
             total_signals += 1
             
-            # Calculate SL/TP same as live
+            # V8.2 IMPROVED SL/TP - Wider SL to avoid wick stops, better RR
             if direction == "BUY":
                 if sweep["is_sweep"] and sweep["type"]=="BUY_SWEEP":
-                    sl = sweep["extreme"] - atr_v*0.5
+                    sl = sweep["extreme"] - atr_v*1.2  # V8.2: 1.2 ATR buffer vs 0.5
                 else:
-                    sl = min(struct["last_low"], min(lows[-5:])) - atr_v*0.8
-                if price - sl > 15: sl = price - 12
-                if price - sl < 4: sl = price - 6
+                    sl = min(struct["last_low"], min(lows[-5:])) - atr_v*1.2
+                if price - sl > 18: sl = price - 15  # Wider max risk
+                if price - sl < 6: sl = price - 8   # Min risk larger
                 risk = price - sl
-                tp1 = struct["last_high"] if struct["last_high"] > price else price + risk
-                tp2 = price + risk*1.8
+                tp1 = price + risk*1.0  # V8.2: Exact 1:1 for TP1
+                tp2 = price + risk*2.2  # V8.2: 1:2.2 vs 1:1.8 (better RR)
             else:
                 if sweep["is_sweep"] and sweep["type"]=="SELL_SWEEP":
-                    sl = sweep["extreme"] + atr_v*0.5
+                    sl = sweep["extreme"] + atr_v*1.2
                 else:
-                    sl = max(struct["last_high"], max(highs[-5:])) + atr_v*0.8
-                if sl - price > 15: sl = price + 12
-                if sl - price < 4: sl = price + 6
+                    sl = max(struct["last_high"], max(highs[-5:])) + atr_v*1.2
+                if sl - price > 18: sl = price + 15
+                if sl - price < 6: sl = price + 8
                 risk = sl - price
-                tp1 = struct["last_low"] if struct["last_low"] < price and struct["last_low"]>0 else price - risk
-                tp2 = price - risk*1.8
+                tp1 = price - risk*1.0
+                tp2 = price - risk*2.2
             
-            # Look ahead next 30 candles (30h) to see outcome
-            future = candles_1h[i:i+30]
+            # V8.2: Look ahead 48h (2 days) to give trades more time to hit TP
+            future = candles_1h[i:i+48]
             outcome = "BE"
             hit_tp1 = False
             hit_tp2 = False
@@ -582,61 +585,52 @@ def build_gold_v8():
         agreeing = buy_signals if direction=="BUY" else sell_signals
 
     avg_conf = sum(s[3] for s in agreeing)/len(agreeing) if agreeing else 0
-    # MTF + Sweep bonus: +15% if sweep aligns with 4H
+    # MTF + Sweep bonus: +15% if sweep aligns with 4H - V8.2 CLEAN LOGIC
     mtf_bonus = 0
     if trend_4h == struct_1h["trend"] == struct_15m["trend"] and trend_4h != "WAIT":
         mtf_bonus += 10
-    if sweep_1h["is_sweep"] and ((sweep_1h["type"]=="BUY_SWEEP" and trend_4h=="BUY") or (sweep_1h["type"]=="SELL_SWEEP" and trend_4H=="SELL" if False else True)):
-        # Check sweep aligns with trend
-        if (sweep_1h["type"]=="BUY_SWEEP" and direction=="BUY") or (sweep_1h["type"]=="SELL_SWEEP" and direction=="SELL"):
-            mtf_bonus += 10
-    conf_pct = min(95, int(avg_conf + mtf_bonus))
-
-    # Fix for above variable typo
+    # Sweep aligns with direction bonus
     if sweep_1h["is_sweep"]:
         if (sweep_1h["type"]=="BUY_SWEEP" and direction=="BUY") or (sweep_1h["type"]=="SELL_SWEEP" and direction=="SELL"):
-            if mtf_bonus < 20:
-                conf_pct = min(95, conf_pct + 5)
+            mtf_bonus += 10
+    if sweep_15m["is_sweep"]:
+        if (sweep_15m["type"]=="BUY_SWEEP" and direction=="BUY") or (sweep_15m["type"]=="SELL_SWEEP" and direction=="SELL"):
+            mtf_bonus += 5
+    conf_pct = min(95, int(avg_conf + mtf_bonus))
 
     if direction == "BUY":
         hl_low = struct_1h["last_low"]
         recent_low_15m = min([c["low"] for c in data["candles_15m"][-5:]]) if data["candles_15m"] else price-10
-        # If sweep, use sweep extreme as SL reference
+        # V8.2 IMPROVED: Wider SL 1.2 ATR to avoid wick stops
         if sweep_1h["is_sweep"] and sweep_1h["type"]=="BUY_SWEEP":
-            sl = sweep_1h["extreme"] - atr_15m*0.5
+            sl = sweep_1h["extreme"] - atr_15m*1.2
         elif sweep_15m["is_sweep"] and sweep_15m["type"]=="BUY_SWEEP":
-            sl = sweep_15m["extreme"] - atr_15m*0.5
+            sl = sweep_15m["extreme"] - atr_15m*1.2
         else:
-            sl = min(hl_low, recent_low_15m) - atr_15m*0.8
-        if price - sl > 15: sl = price - 12
-        if price - sl < 4: sl = price - 6
+            sl = min(hl_low, recent_low_15m) - atr_15m*1.2
+        if price - sl > 18: sl = price - 15
+        if price - sl < 6: sl = price - 8
         risk = price - sl
-        tp1 = struct_1h["last_high"]
-        if tp1 <= price: tp1 = price + risk*1.0
-        tp2 = tp1 + risk*1.0
-        tp3 = struct_4h["last_high"]
-        if tp3 <= price: tp3 = price + risk*2.5
-        tp2 = max(tp2, price + risk*1.8)
+        tp1 = price + risk*1.0  # V8.2: Exact 1:1
+        tp2 = price + risk*2.2  # V8.2: 1:2.2 RR
+        tp3 = price + risk*3.0
     elif direction == "SELL":
         lh_high = struct_1h["last_high"]
         recent_high_15m = max([c["high"] for c in data["candles_15m"][-5:]]) if data["candles_15m"] else price+10
         if sweep_1h["is_sweep"] and sweep_1h["type"]=="SELL_SWEEP":
-            sl = sweep_1h["extreme"] + atr_15m*0.5
+            sl = sweep_1h["extreme"] + atr_15m*1.2
         elif sweep_15m["is_sweep"] and sweep_15m["type"]=="SELL_SWEEP":
-            sl = sweep_15m["extreme"] + atr_15m*0.5
+            sl = sweep_15m["extreme"] + atr_15m*1.2
         else:
-            sl = max(lh_high, recent_high_15m) + atr_15m*0.8
-        if sl - price > 15: sl = price + 12
-        if sl - price < 4: sl = price + 6
+            sl = max(lh_high, recent_high_15m) + atr_15m*1.2
+        if sl - price > 18: sl = price + 15
+        if sl - price < 6: sl = price + 8
         risk = sl - price
-        tp1 = struct_1h["last_low"]
-        if tp1 >= price: tp1 = price - risk*1.0
-        tp2 = tp1 - risk*1.0
-        tp3 = struct_4h["last_low"]
-        if tp3 >= price: tp3 = price - risk*2.5
-        tp2 = min(tp2, price - risk*1.8)
+        tp1 = price - risk*1.0
+        tp2 = price - risk*2.2
+        tp3 = price - risk*3.0
     else:
-        sl = price - 10; tp1 = price + 6; tp2 = price + 12; tp3 = price + 18; risk = 10
+        sl = price - 10; tp1 = price + 8; tp2 = price + 16; tp3 = price + 24; risk = 8
 
     now = datetime.now().strftime("%H:%M:%S %d/%m")
     src = "TwelveData" if use_td else "GoldAPI+Synthetic"
@@ -804,15 +798,15 @@ async def backtest(update, context):
         msg += f"Candles: {result['candles_used']} x 1H (~{result['candles_used']//24} days)\n"
         msg += f"Total Signals (75%+ + Sweep): {result['total_signals']}\n"
         msg += f"Closed Trades: {result['total_closed']}\n"
-        msg += f"✅ TP2 WIN (1:1.8): {result['wins_tp2']}\n"
+        msg += f"✅ TP2 WIN (1:2.2): {result['wins_tp2']}\n"
         msg += f"✅ TP1 WIN (1:1): {result['wins_tp1']}\n"
         msg += f"❌ LOSS (SL hit): {result['losses']}\n"
-        msg += f"➖ BE (no TP/SL in 30h): {result['be']}\n"
+        msg += f"➖ BE (no TP/SL in 48h): {result['be']}\n"
         msg += f"\n🏆 WIN RATE: {result['win_rate']:.1f}% (TP1+TP2)\n"
-        msg += f"💎 TP2 RATE: {result['tp2_rate']:.1f}% (full 1:1.8 RR)\n"
+        msg += f"💎 TP2 RATE: {result['tp2_rate']:.1f}% (full 1:2.2 RR)\n"
         msg += f"\nStrategy: Side Sweep + CHoCH + EMA Trend + RSI\n"
-        msg += f"SL: Sweep Extreme + ATR | TP1 structure | TP2 1:1.8\n"
-        msg += f"Entry: SWEEP -> CHoCH -> BOS (your V8.1 logic)\n"
+        msg += f"SL: Sweep Extreme + 1.2 ATR | TP1 1:1 | TP2 1:2.2\n"
+        msg += f"Entry: SWEEP -> CHoCH -> BOS | RSI Filter | 4H Align V8.2\n"
         
         if result['last_trades']:
             msg += f"\n📜 Last 10 trades:\n"
