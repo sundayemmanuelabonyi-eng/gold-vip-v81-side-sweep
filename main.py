@@ -35,9 +35,21 @@ threading.Thread(target=keep_alive, daemon=True).start()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DEFAULT_CHANNEL_ID = "-1004402762942"
-CHANNEL_ID = os.getenv("CHANNEL_ID", DEFAULT_CHANNEL_ID)
-if CHANNEL_ID.startswith("@"):
-    CHANNEL_ID = DEFAULT_CHANNEL_ID
+
+def normalize_channel_id(raw):
+    raw = (raw or "").strip()
+    if not raw or raw.startswith("@"):
+        return DEFAULT_CHANNEL_ID
+    # Keep only digits and -
+    digits = "".join(c for c in raw if c.isdigit())
+    if not digits:
+        return DEFAULT_CHANNEL_ID
+    if digits.startswith("100"):
+        return f"-{digits}"
+    return f"-100{digits}"
+
+CHANNEL_ID = normalize_channel_id(os.getenv("CHANNEL_ID", DEFAULT_CHANNEL_ID))
+
 ADMIN_ID = int(os.getenv("ADMIN_ID", "2093810683"))
 CRYPTO_WALLET = "TGQu8k7BYJ8h1seQLBT6K8GFgajS33TYdM"
 CHANNEL_USERNAME = "@GoldVIPSignalsOnyebest"
@@ -504,7 +516,7 @@ def build_gold_v8():
 async def start(update, context):
     SUBSCRIBERS.add(update.effective_chat.id)
     td_status = "✅ TwelveData ON" if TWELVE_KEY else "⚠️ TwelveData OFF - Set TWELVE_DATA_API_KEY env"
-    msg = f"🏆 GOLD VIP V8.1 SIDE SWEEP MT5 PRICE ACTION 🏆\n\n💰 VIP: $25 / month\n📢 Channel: {CHANNEL_USERNAME}\n🆔 ID: {CHANNEL_ID}\n💳 Wallet: {CRYPTO_WALLET}\n{td_status}\n\nStrategy: 4H Father + 1H Side Sweep (MT5 PA) + 1H CHoCH/LH/BOS + 15M BOS\nEntry: SIDE SWEEP -> CHoCH -> HL/LH -> BOS\nSL/TP: Sweep Extreme + ATR | TP1 1H | TP2 1:2 | TP3 4H\nPrice Action: Equal Highs/Lows Liquidity Grab from MT5\n\nCommands:\n/signal - V8.1 signal now\n/mtf - 4H 1H 15M + Sweep structure\n/sweep - Check side sweep only\n/autopilot - Auto every 15 min\n/autostop - Stop\n/news - DXY Yield\n/buy - Join VIP $25\n/channeltest - Test channel\n/backtest - 6-month backtest V8.1 Side Sweep"
+    msg = f"🏆 GOLD VIP V8.1 SIDE SWEEP MT5 PRICE ACTION 🏆\n\n💰 VIP: $25 / month\n📢 Channel: {CHANNEL_USERNAME}\n🆔 ID: {CHANNEL_ID}\n💳 Wallet: {CRYPTO_WALLET}\n{td_status}\n\nStrategy: 4H Father + 1H Side Sweep (MT5 PA) + 1H CHoCH/LH/BOS + 15M BOS\nEntry: SIDE SWEEP -> CHoCH -> HL/LH -> BOS\nSL/TP: Sweep Extreme + ATR | TP1 1H | TP2 1:2 | TP3 4H\nPrice Action: Equal Highs/Lows Liquidity Grab from MT5\n\nCommands:\n/signal - V8.1 signal now\n/mtf - 4H 1H 15M + Sweep structure\n/sweep - Check side sweep only\n/autopilot - Auto every 15 min\n/autostop - Stop\n/news - DXY Yield\n/buy - Join VIP $25\n/channeltest - Test channel\n/sendvip - Admin send to VIP"
     await update.message.reply_text(msg)
 
 async def buy(update, context):
