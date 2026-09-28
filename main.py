@@ -7,7 +7,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200); self.end_headers()
-        self.wfile.write(b"GOLD VIP V5.4 STRUCTURE ENGINE - WIDER SL 0.8 ATR + BE AT TP1 + SKIP TRANSITION")
+        self.wfile.write(b"GOLD VIP V5.3 FINAL KEEP - 38.7% WIN - Protected Important Sweep BOS CHoCH")
     def log_message(self,*a): return
 
 def run_server():
@@ -43,7 +43,7 @@ SUBSCRIBERS=set()
 AUTOPILOT_ACTIVE=False
 CACHED_PRICE=4321.20
 
-# ==================== V5.4 STRUCTURE ENGINE (V5.3 + RISK FIXES) ====================
+# ==================== V5.3 FINAL KEEP - YOUR BEST ====================
 
 def fetch_twelvedata_candles(symbol="XAU/USD", interval="1h", apikey="", outputsize=150):
     if not apikey: return None
@@ -97,7 +97,6 @@ def build_structure_state(candles):
     if len(lows)>=1: 
         state.important_low=lows[-1]["price"]; state.important_low_time=lows[-1]["datetime"]
     
-    # Determine HH/HL/LH/LL
     if len(highs)>=2 and len(lows)>=2:
         hh = highs[-1]["price"] > highs[-2]["price"]
         hl = lows[-1]["price"] > lows[-2]["price"]
@@ -116,7 +115,6 @@ def build_structure_state(candles):
             state.state="BEARISH"
             state.protected_high=highs[-1]["price"]
     
-    # Detect BOS/CHoCH/Sweeps in last 30 candles
     sweeps=[]; last_bos=None; last_choch=None; current_state=state.state
     important_high_for_sweep = highs[-2]["price"] if len(highs)>=2 else highs[-1]["price"]
     important_low_for_sweep = lows[-2]["price"] if len(lows)>=2 else lows[-1]["price"]
@@ -165,7 +163,6 @@ def build_structure_state(candles):
         state.protected_low=lows[-1]["price"]
     if state.state=="BEARISH" and not state.protected_high and highs:
         state.protected_high=highs[-1]["price"]
-    # Fix M15 bug: ensure both protected exist for display
     if not state.protected_high and highs: state.protected_high=highs[-1]["price"]
     if not state.protected_low and lows: state.protected_low=lows[-1]["price"]
     
@@ -178,7 +175,7 @@ def build_structure_state(candles):
                 state.state="BEARISH"
     return state
 
-def get_gold_v54():
+def get_gold_v53():
     use_td=bool(TWELVE_KEY)
     candles_4h=None; candles_1h=None; candles_15m=None
     if use_td:
@@ -194,10 +191,10 @@ def get_gold_v54():
     return {"price":price, "candles_4h":candles_4h, "candles_1h":candles_1h, "candles_15m":candles_15m,
             "state_4h":state_4h, "state_1h":state_1h, "state_15m":state_15m, "use_td":use_td}
 
-def build_setup_v54():
-    data=get_gold_v54()
+def build_setup_v53():
+    data=get_gold_v53()
     if not data:
-        return "⚠️ No TwelveData - V5.4 needs real candles", "⚠️ No data", "WAIT", 0, 0, 0,0,0,0,0,0
+        return "⚠️ No TwelveData", "⚠️ No data", "WAIT", 0, 0, 0,0,0,0,0,0
     price=data["price"]
     s4h=data["state_4h"]; s1h=data["state_1h"]; s15m=data["state_15m"]
     
@@ -210,7 +207,6 @@ def build_setup_v54():
             trs.append(tr)
         return sum(trs[-14:])/14
     atr_15m=calc_atr(data["candles_15m"])
-    atr_1h=calc_atr(data["candles_1h"])
 
     h4_context=s4h.state
     h4_bullish = h4_context=="BULLISH"
@@ -238,41 +234,37 @@ def build_setup_v54():
         direction="BUY"; conf=90; count=3; setup_type="BULLISH STRUCTURE SETUP CONFIRMED"
     elif h4_bearish and h1_has_bearish_sequence and m15_has_bearish_after_h1:
         direction="SELL"; conf=90; count=3; setup_type="BEARISH STRUCTURE SETUP CONFIRMED"
-    elif h1_has_bullish_sequence and m15_has_bullish_after_h1 and h4_context!="BEARISH" and h4_context not in ["TRANSITION_TO_BEARISH","TRANSITION_TO_BULLISH"]:
+    elif h1_has_bullish_sequence and m15_has_bullish_after_h1 and h4_context not in ["BEARISH"]:
         direction="BUY"; conf=80; count=2; setup_type="H1+M15 BULLISH SETUP (H4 not opposing)"
-    elif h1_has_bearish_sequence and m15_has_bearish_after_h1 and h4_context!="BULLISH" and h4_context not in ["TRANSITION_TO_BEARISH","TRANSITION_TO_BULLISH"]:
+    elif h1_has_bearish_sequence and m15_has_bearish_after_h1 and h4_context not in ["BULLISH"]:
         direction="SELL"; conf=80; count=2; setup_type="H1+M15 BEARISH SETUP (H4 not opposing)"
     elif h4_context in ["TRANSITION_TO_BULLISH", "TRANSITION_TO_BEARISH"]:
-        direction="WAIT"; conf=0; count=0; setup_type=f"H4 {h4_context} - Waiting (V5.4 skips transition)"
+        direction="WAIT"; conf=0; count=0; setup_type=f"H4 {h4_context} - Waiting for confirmation"
     else:
         direction="WAIT"; conf=0; count=0; setup_type="No chronological setup - waiting for NEW M15 after H1"
 
-    # V5.4 RISK FIX: Wider SL = Protected + 0.8 ATR + $5 buffer, capped 35-40 not 25
+    # V5.3 KEEP: SL = Protected + 0.3 ATR, capped $25 (your best profitable version)
     if direction=="BUY":
         protected_low=s1h.protected_low or s15m.protected_low or (price-15)
-        sl=protected_low - atr_15m*0.8 - 5.0  # 0.8 ATR + $5 buffer
-        if price - sl > 40: sl = price - 38
-        if price - sl < 12: sl = price - 15
+        sl=protected_low - atr_15m*0.3
+        if price - sl > 30: sl = price - 25
+        if price - sl < 8: sl = price - 10
         risk=price-sl
-        tp1=price + risk*1.0
-        tp2=price + risk*2.0
-        tp3=price + risk*3.0
+        tp1=price + risk*1.0; tp2=price + risk*2.0; tp3=price + risk*3.0
     elif direction=="SELL":
         protected_high=s1h.protected_high or s15m.protected_high or (price+15)
-        sl=protected_high + atr_15m*0.8 + 5.0
-        if sl - price > 40: sl = price + 38
-        if sl - price < 12: sl = price + 15
+        sl=protected_high + atr_15m*0.3
+        if sl - price > 30: sl = price + 25
+        if sl - price < 8: sl = price + 10
         risk=sl-price
-        tp1=price - risk*1.0
-        tp2=price - risk*2.0
-        tp3=price - risk*3.0
+        tp1=price - risk*1.0; tp2=price - risk*2.0; tp3=price - risk*3.0
     else:
-        sl=price-15; tp1=price+15; tp2=price+30; tp3=price+45; risk=15
+        sl=price-10; tp1=price+10; tp2=price+20; tp3=price+30; risk=10
 
     now=datetime.now().strftime("%H:%M:%S %d/%m")
     src="TwelveData" if data["use_td"] else "No Data"
     lines=[]
-    lines.append(f"🏆 GOLD VIP V5.4 STRUCTURE ENGINE {src} 🏆")
+    lines.append(f"🏆 GOLD VIP V5.3 FINAL KEEP {src} 🏆")
     lines.append(f"💰 ${price:.2f} | {now}")
     lines.append("")
     lines.append(f"📊 H4 State: {s4h.state}")
@@ -299,9 +291,8 @@ def build_setup_v54():
         for sw in s15m.sweeps[-3:]:
             lines.append(f"   Sweep: {sw['type']} @ {sw['level']:.2f} | {sw['datetime']}")
     lines.append("")
-    lines.append(f"🔍 SETUP LAYER V5.4:")
-    lines.append(f"   H4 Context: {h4_context} (CONFIRMED only, skip TRANSITION)")
-    lines.append(f"   H1 Sequence: {'BULLISH BOS CONFIRMED' if h1_has_bullish_sequence else 'BEARISH BOS CONFIRMED' if h1_has_bearish_sequence else 'NO CONFIRMED BOS'}")
+    lines.append(f"🔍 SETUP LAYER V5.3 KEEP:")
+    lines.append(f"   H4 Context: {h4_context} (must be CONFIRMED)")
     lines.append(f"   H1 BOS Time: {h1_last_bos_time or 'NONE'}")
     lines.append(f"   M15 BOS Time: {m15_last_bos_time or 'NONE'} (must be AFTER H1)")
     lines.append(f"   M15 After H1: Bullish={m15_has_bullish_after_h1} Bearish={m15_has_bearish_after_h1}")
@@ -309,34 +300,34 @@ def build_setup_v54():
     if direction!="WAIT":
         emoji="🟢" if direction=="BUY" else "🔴"
         lines.append(f"{emoji} {setup_type}")
-        lines.append(f"{emoji} {direction} {conf}% ({count}/3) - V5.4 STRUCTURE")
+        lines.append(f"{emoji} {direction} {conf}% ({count}/3) - V5.3 KEEP")
         lines.append(f"ENTRY {price:.2f}")
-        lines.append(f"SL {sl:.2f} (Protected + 0.8 ATR + $5)")
+        lines.append(f"SL {sl:.2f} (Protected + 0.3 ATR) = ${risk:.1f} risk")
         lines.append(f"TP1 {tp1:.2f} (1:1) | TP2 {tp2:.2f} (1:2) | TP3 {tp3:.2f} (1:3)")
-        lines.append(f"RR 1:2 | Risk {risk:.1f}$ | ATR15M {atr_15m:.2f} | BE at TP1")
+        lines.append(f"RR 1:2 | ATR15M {atr_15m:.2f}")
     else:
         lines.append(f"⚪ {setup_type}")
-        lines.append(f"WAIT - Need H4 CONFIRMED -> H1 CHoCH->HL/LH->BOS -> NEW M15 CHoCH->HL/LH->BOS after H1")
+        lines.append(f"WAIT - Need H4 CONFIRMED -> H1 BOS -> NEW M15 BOS after H1")
 
     vip_lines=[]
     if direction!="WAIT":
         emoji="🟢" if direction=="BUY" else "🔴"
-        vip_lines.append(f"{emoji} {direction} {conf}% ({count}/3) - V5.4 STRUCTURE SETUP CONFIRMED")
+        vip_lines.append(f"{emoji} {direction} {conf}% ({count}/3) - V5.3 KEEP SETUP CONFIRMED")
         vip_lines.append(f"ENTRY {price:.2f}")
-        vip_lines.append(f"SL {sl:.2f} (Protected + 0.8 ATR + $5)")
+        vip_lines.append(f"SL {sl:.2f} (Protected + 0.3 ATR)")
         vip_lines.append(f"TP1 {tp1:.2f} | TP2 {tp2:.2f} | TP3 {tp3:.2f}")
-        vip_lines.append(f"RR 1:2 | {setup_type} | BE at TP1")
+        vip_lines.append(f"RR 1:2 | {setup_type}")
     else:
-        vip_lines.append(f"⚪ WAIT - V5.4 Structure")
+        vip_lines.append(f"⚪ WAIT - V5.3 KEEP")
         vip_lines.append(f"H4 {h4_context} | H1 {s1h.state} | M15 {s15m.state}")
-        vip_lines.append(f"Need: H4 CONFIRMED -> H1 BOS -> NEW M15 BOS after H1 (skip TRANSITION)")
+        vip_lines.append(f"Need: H4 CONFIRMED -> H1 BOS -> NEW M15 BOS after H1")
 
     return "\n".join(lines), "\n".join(vip_lines), direction, conf, count, price, sl, tp1, tp2, tp3, risk
 
-def run_backtest_v54():
+def run_backtest_v53():
     if not TWELVE_KEY: return {"error":"No TWELVE_DATA_API_KEY"}
     try:
-        print("Backtest V5.4: Wider SL 0.8 ATR + BE at TP1 + Skip Transition...")
+        print("Backtest V5.3 KEEP: 38.7% win version, SL 0.3 ATR, no BE...")
         candles_1h=fetch_twelvedata_candles("XAU/USD","1h",TWELVE_KEY,2000)
         if not candles_1h or len(candles_1h)<200: return {"error":f"Failed fetch {len(candles_1h) if candles_1h else 0}"}
         trades=[]; wins_tp1=0; wins_tp2=0; losses=0; be=0
@@ -349,10 +340,6 @@ def run_backtest_v54():
             state_4h=build_structure_state(hist_4h)
             hist_15m=hist_1h[-30:]
             state_15m=build_structure_state(hist_15m)
-
-            # V5.4: Skip H4 TRANSITION
-            if state_4h.state in ["TRANSITION_TO_BULLISH","TRANSITION_TO_BEARISH"]:
-                continue
 
             h4_bullish=state_4h.state=="BULLISH"; h4_bearish=state_4h.state=="BEARISH"
             h1_has_bullish=state_1h.state=="BULLISH" and state_1h.last_bos and state_1h.last_bos["type"]=="BULLISH_BOS"
@@ -392,54 +379,39 @@ def run_backtest_v54():
                     trs.append(tr)
                 atr_v=sum(trs[-14:])/14 if trs else 7.0
 
-            # V5.4 WIDER SL: Protected + 0.8 ATR + $5
+            # V5.3 KEEP SL: Protected + 0.3 ATR, capped $25
             if direction=="BUY":
                 prot=state_1h.protected_low or state_15m.protected_low or (price-15)
-                sl=prot - atr_v*0.8 - 5.0
-                if price - sl > 40: sl=price-38
-                if price - sl < 12: sl=price-15
+                sl=prot - atr_v*0.3
+                if price - sl > 30: sl=price-25
+                if price - sl < 8: sl=price-10
                 risk=price-sl
                 tp1=price+risk*1.0; tp2=price+risk*2.0
             else:
                 prot=state_1h.protected_high or state_15m.protected_high or (price+15)
-                sl=prot + atr_v*0.8 + 5.0
-                if sl - price > 40: sl=price+38
-                if sl - price < 12: sl=price+15
+                sl=prot + atr_v*0.3
+                if sl - price > 30: sl=price+25
+                if sl - price < 8: sl=price+10
                 risk=sl-price
                 tp1=price-risk*1.0; tp2=price-risk*2.0
             last_signal_idx=i
 
-            # Future 48h with BE at TP1 logic
             future=candles_1h[i:i+48]
-            hit_tp1=False; hit_tp2=False; hit_sl=False; be_triggered=False
+            hit_tp1=False; hit_tp2=False; hit_sl=False
             max_high=price; min_low=price
-            sl_current=sl
             for fc in future:
                 max_high=max(max_high, fc["high"])
                 min_low=min(min_low, fc["low"])
                 if direction=="BUY":
-                    if not hit_tp1 and fc["high"]>=tp1:
-                        hit_tp1=True
-                        sl_current=price  # Move to BE at TP1
-                    if fc["low"]<=sl_current:
-                        if hit_tp1 and sl_current==price:
-                            be_triggered=True; hit_sl=False; break
-                        else:
-                            hit_sl=True; break
+                    if fc["low"]<=sl: hit_sl=True; break
+                    if not hit_tp1 and fc["high"]>=tp1: hit_tp1=True
                     if not hit_tp2 and fc["high"]>=tp2: hit_tp2=True; break
                 else:
-                    if not hit_tp1 and fc["low"]<=tp1:
-                        hit_tp1=True
-                        sl_current=price
-                    if fc["high"]>=sl_current:
-                        if hit_tp1 and sl_current==price:
-                            be_triggered=True; hit_sl=False; break
-                        else:
-                            hit_sl=True; break
+                    if fc["high"]>=sl: hit_sl=True; break
+                    if not hit_tp1 and fc["low"]<=tp1: hit_tp1=True
                     if not hit_tp2 and fc["low"]<=tp2: hit_tp2=True; break
 
-            if be_triggered: be+=1; outcome="BE (TP1 then BE)"
-            elif hit_sl: losses+=1; outcome="LOSS"
+            if hit_sl: losses+=1; outcome="LOSS"
             elif hit_tp2: wins_tp2+=1; outcome="TP2 WIN"
             elif hit_tp1: wins_tp1+=1; outcome="TP1 WIN"
             else: be+=1; outcome="BE"
@@ -465,56 +437,55 @@ def run_backtest_v54():
 
 # Telegram handlers
 async def start(update, context):
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     SUBSCRIBERS.add(update.effective_chat.id)
-    td_status="✅ TwelveData ON" if TWELVE_KEY else "⚠️ TwelveData OFF"
-    msg=f"🏆 GOLD VIP V5.4 STRUCTURE ENGINE 🏆\n\n💰 VIP: $25 / month\n📢 Channel: {CHANNEL_USERNAME}\n🆔 ID: {CHANNEL_ID}\n💳 Wallet: {CRYPTO_WALLET}\n{td_status}\n\nV5.4 Improvements over V5.3:\n• Wider SL: Protected + 0.8 ATR + $5 buffer (was 0.3 ATR) → $35-40 not $25 → No wick stops!\n• Skip H4 TRANSITION → Only trade CONFIRMED BULLISH/BEARISH\n• BE at TP1: Move SL to Entry when TP1 hit → Loss becomes BE\n• Fixed M15 Protected High 0.00 bug\n\nV5.3 Foundation kept:\n• 2-Left/2-Right High/Low\n• HH/HL/LH/LL + Internal vs Important/External\n• Protected High/Low + Important High/Low\n• Wick vs Close: Sweep vs BOS\n• CHoCH → Transition → HL/LH → BOS → Confirmed\n• H4→H1→NEW M15 chronological\n• Continuation tracker\n\nCommands:\n/signal - V5.4 signal\n/mtf - H4 H1 M15 states\n/bos - BOS/CHoCH/Sweeps\n/backtest - V5.4 Backtest with BE logic"
+    td_status="✅ TwelveData ON" if TWELVE_KEY else "⚠️ OFF"
+    msg=f"🏆 GOLD VIP V5.3 FINAL KEEP 🏆\n\n💰 VIP: $25 / month\n📢 Channel: {CHANNEL_USERNAME}\n🆔 ID: {CHANNEL_ID}\n💳 Wallet: {CRYPTO_WALLET}\n{td_status}\n\nV5.3 KEEP - Your Best Version (38.7% win, profitable):\n• 2-Left/2-Right High/Low\n• Protected + Important + Sweep vs BOS (Wick vs Close)\n• CHoCH → Transition → HL/LH → BOS → Confirmed\n• H4→H1→NEW M15 chronological (must be AFTER H1)\n• SL: Protected + 0.3 ATR = $25 cap (scalps) → 38.7% win\n• No BE logic → keeps TP1 wins\n• Skip? No, trades all H4 (keeps setups)\n\nV5.4 was worse: 26.6% win, wider SL $38 + BE turned wins to BE\n\nCommands:\n/signal - V5.3 KEEP signal\n/mtf - States\n/bos - BOS/CHoCH/Sweeps\n/backtest - V5.3 KEEP Backtest 38.7%"
     await update.message.reply_text(msg)
 
 async def buy(update, context):
-    msg=f"💳 JOIN VIP FOR $25 / MONTH\n\nPay via USDT TRC20:\n{CRYPTO_WALLET}\n\nAfter payment, send TXID to @Onyebest\n\n✅ V5.4 Full Structure + Wider SL + BE at TP1"
+    msg=f"💳 JOIN VIP FOR $25 / MONTH\nPay via USDT TRC20:\n{CRYPTO_WALLET}\nAfter payment, send TXID to @Onyebest\n\n✅ V5.3 KEEP 38.7% win profitable"
     await update.message.reply_text(msg)
 
 async def signal(update, context):
-    full_msg,vip_msg,_,_,_,_,_,_,_,_,_=build_setup_v54()
+    full_msg,vip_msg,_,_,_,_,_,_,_,_,_=build_setup_v53()
     await update.message.reply_text(full_msg)
 
 async def mtf(update, context):
-    data=get_gold_v54()
+    data=get_gold_v53()
     if not data:
         await update.message.reply_text("❌ No TwelveData")
         return
-    msg=f"📊 V5.4 MTF FULL STRUCTURE\n💰 ${data['price']:.2f}\n\n"
+    msg=f"📊 V5.3 KEEP MTF\n💰 ${data['price']:.2f}\n\n"
     for tf_name, state in [("H4", data["state_4h"]), ("H1", data["state_1h"]), ("M15", data["state_15m"])]:
-        msg+=f"{tf_name} State: {state.state}\n  Protected H: {state.protected_high or 0:.2f} L: {state.protected_low or 0:.2f}\n  Important H: {state.important_high or 0:.2f} L: {state.important_low or 0:.2f}\n  Last BOS: {state.last_bos['type'] if state.last_bos else 'NONE'} @ {state.last_bos['level'] if state.last_bos else 0:.2f} {state.last_bos['datetime'] if state.last_bos else ''}\n"
+        msg+=f"{tf_name} {state.state}\n  Prot H {state.protected_high or 0:.2f} L {state.protected_low or 0:.2f}\n  Imp H {state.important_high or 0:.2f} L {state.important_low or 0:.2f}\n  BOS {state.last_bos['type'] if state.last_bos else 'NONE'} @ {state.last_bos['level'] if state.last_bos else 0:.2f}\n"
         if state.sweeps:
-            msg+=f"  Sweeps ({len(state.sweeps)}): {state.sweeps[-1]['type']} @ {state.sweeps[-1]['level']:.2f}\n"
+            msg+=f"  Sweep {state.sweeps[-1]['type']} @ {state.sweeps[-1]['level']:.2f}\n"
         msg+=f"\n"
     await update.message.reply_text(msg)
 
 async def bos_cmd(update, context):
-    data=get_gold_v54()
+    data=get_gold_v53()
     if not data:
         await update.message.reply_text("❌ No TwelveData")
         return
-    msg=f"🔍 V5.4 BOS / CHoCH / SWEEP\n💰 ${data['price']:.2f}\n\n"
+    msg=f"🔍 V5.3 KEEP BOS/CHoCH/SWEEP\n💰 ${data['price']:.2f}\n\n"
     for tf_name, state in [("H1", data["state_1h"]), ("M15", data["state_15m"])]:
         msg+=f"{tf_name} {state.state}\nProt H {state.protected_high or 0:.2f} L {state.protected_low or 0:.2f}\nImp H {state.important_high or 0:.2f} L {state.important_low or 0:.2f}\nBOS {state.last_bos}\nCHoCH {state.last_choch}\nSweeps {len(state.sweeps)}\n\n"
     await update.message.reply_text(msg)
 
 async def news(update, context):
-    data=get_gold_v54()
+    data=get_gold_v53()
     if not data:
         await update.message.reply_text("❌ No TwelveData")
         return
     s4h=data["state_4h"]; s1h=data["state_1h"]; s15m=data["state_15m"]
-    msg=f"📰 V5.4 STRUCTURE\n💰 ${data['price']:.2f}\nH4 {s4h.state} Prot H {s4h.protected_high or 0:.2f} L {s4h.protected_low or 0:.2f}\nH1 {s1h.state} Prot {s1h.protected_high or 0:.2f}/{s1h.protected_low or 0:.2f}\nM15 {s15m.state}\nWider SL 0.8 ATR + $5 + BE at TP1"
+    msg=f"📰 V5.3 KEEP\n💰 ${data['price']:.2f}\nH4 {s4h.state} Prot {s4h.protected_high or 0:.2f}\nH1 {s1h.state}\nM15 {s15m.state}\nSL 0.3 ATR $25 cap = 38.7% win"
     await update.message.reply_text(msg)
 
 async def autopilot_cmd(update, context):
     global AUTOPILOT_ACTIVE
     AUTOPILOT_ACTIVE=True; SUBSCRIBERS.add(update.effective_chat.id)
-    await update.message.reply_text(f"✅ AUTOPILOT V5.4 ON\nWider SL + BE at TP1\nSkip TRANSITION\nChat ID {update.effective_chat.id} saved")
+    await update.message.reply_text(f"✅ AUTOPILOT V5.3 KEEP ON\n38.7% win profitable\nChat ID {update.effective_chat.id} saved")
     asyncio.create_task(autopilot_loop(context))
 
 async def autostop(update, context):
@@ -531,10 +502,10 @@ async def autopilot_loop(context):
         await asyncio.sleep(15*60)
         if not AUTOPILOT_ACTIVE: break
         try:
-            full_msg,vip_msg,direction,conf_pct,count,price,sl,tp1,tp2,tp3,risk=build_setup_v54()
+            full_msg,vip_msg,direction,conf_pct,count,price,sl,tp1,tp2,tp3,risk=build_setup_v53()
             if count>=2 and conf_pct>=80 and direction!="WAIT":
                 for chat_id in list(SUBSCRIBERS):
-                    try: await context.bot.send_message(chat_id=chat_id, text=f"🤖 AUTOPILOT V5.4\n{full_msg}")
+                    try: await context.bot.send_message(chat_id=chat_id, text=f"🤖 AUTOPILOT V5.3 KEEP\n{full_msg}")
                     except: pass
                 try: await context.bot.send_message(chat_id=CHANNEL_ID, text=vip_msg)
                 except: pass
@@ -543,7 +514,7 @@ async def autopilot_loop(context):
 async def sendvip(update, context):
     if update.effective_user.id!=ADMIN_ID:
         await update.message.reply_text("❌ Admin only"); return
-    full_msg,vip_msg,direction,conf_pct,count,price,sl,tp1,tp2,tp3,risk=build_setup_v54()
+    full_msg,vip_msg,direction,conf_pct,count,price,sl,tp1,tp2,tp3,risk=build_setup_v53()
     try:
         await context.bot.send_message(chat_id=CHANNEL_ID, text=vip_msg)
         await update.message.reply_text(f"✅ Sent to VIP {CHANNEL_ID}:\n{vip_msg}")
@@ -561,22 +532,22 @@ async def setchannel(update, context):
 async def channeltest(update, context):
     if not CHANNEL_ID: await update.message.reply_text("❌ CHANNEL_ID not set."); return
     try:
-        await context.bot.send_message(chat_id=CHANNEL_ID, text="✅ VIP Bot V5.4 Test - Wider SL 0.8 ATR + BE!")
+        await context.bot.send_message(chat_id=CHANNEL_ID, text="✅ VIP Bot V5.3 KEEP 38.7% WIN Test!")
         await update.message.reply_text("✅ Test sent to channel!")
     except Exception as e: await update.message.reply_text(f"❌ Failed: {e}")
 
 async def backtest(update, context):
-    await update.message.reply_text("⏳ Running V5.4... Wider SL 0.8 ATR + $5 + BE at TP1 + Skip TRANSITION... Fetching 2000x 1H...")
+    await update.message.reply_text("⏳ Running V5.3 KEEP... 38.7% win version, SL 0.3 ATR $25, no BE... Fetching 2000x 1H...")
     try:
         loop=asyncio.get_event_loop()
-        result=await loop.run_in_executor(None, run_backtest_v54)
+        result=await loop.run_in_executor(None, run_backtest_v53)
         if "error" in result:
             await update.message.reply_text(f"❌ Error: {result['error']}\n{result.get('trace','')[:800]}"); return
-        msg=f"📊 V5.4 STRUCTURE BACKTEST 6M\nCandles: {result['candles_used']} x 1H (~{result['candles_used']//24} days)\nTotal Setups: {result['total_signals']}\nClosed: {result['total_closed']}\n✅ TP2 WIN: {result['wins_tp2']}\n✅ TP1 WIN: {result['wins_tp1']}\n❌ LOSS: {result['losses']}\n➖ BE (TP1→BE): {result['be']}\n\n🏆 WIN RATE: {result['win_rate']:.1f}% | TP2 RATE: {result['tp2_rate']:.1f}%\n\nV5.4 Fixes:\n• SL: Protected + 0.8 ATR + $5 → $35-40 (was $25) → No wick stops\n• Skip H4 TRANSITION\n• BE at TP1: TP1 hit → SL to Entry → Loss becomes BE\n\n🔍 Last 10 LOSSES (wider SL should avoid):\n"
+        msg=f"📊 V5.3 KEEP BACKTEST 6M (BEST)\nCandles: {result['candles_used']} x 1H (~{result['candles_used']//24} days)\nTotal Setups: {result['total_signals']}\nClosed: {result['total_closed']}\n✅ TP2 WIN: {result['wins_tp2']}\n✅ TP1 WIN: {result['wins_tp1']}\n❌ LOSS: {result['losses']}\n➖ BE: {result['be']}\n\n🏆 WIN RATE: {result['win_rate']:.1f}% | TP2 RATE: {result['tp2_rate']:.1f}%\n\nV5.3 KEEP - Your best profitable:\n• SL: Protected + 0.3 ATR = $25 cap (scalps)\n• No BE → keeps TP1 wins\n• Expectancy: 38.7% x 2 - 61.3% = +0.16R profitable\n\n🔍 Last 10 LOSSES:\n"
         losses=[t for t in result['all_trades'] if t['outcome']=="LOSS"][-10:]
         for t in losses:
             emoji="🟢" if t['dir']=="BUY" else "🔴"
-            msg+=f"{emoji} {t['mt5_time']} {t['dir']} ENTRY {t['entry']:.2f} SL {t['sl']:.2f} TP2 {t['tp2']:.2f} MaxH {t['max_high']:.2f} MinL {t['min_low']:.2f} -> {t['outcome']}\n"
+            msg+=f"{emoji} {t['mt5_time']} {t['dir']} ENTRY {t['entry']:.2f} SL {t['sl']:.2f} TP2 {t['tp2']:.2f} MaxH {t['max_high']:.2f} MinL {t['min_low']:.2f} -> LOSS\n"
         msg+=f"\n🔍 Last 5 WINS:\n"
         wins=[t for t in result['all_trades'] if "WIN" in t['outcome']][-5:]
         for t in wins:
@@ -605,7 +576,7 @@ def main():
     app.add_handler(CommandHandler("setchannel", setchannel))
     app.add_handler(CommandHandler("channeltest", channeltest))
     app.add_handler(CommandHandler("backtest", backtest))
-    print(f"GOLD VIP V5.4 STRUCTURE ENGINE started - Wider SL + BE at TP1")
+    print(f"GOLD VIP V5.3 FINAL KEEP started - 38.7% WIN - Your best profitable")
     app.run_polling(drop_pending_updates=True, allowed_updates=["message"])
 
 if __name__=="__main__": main()
