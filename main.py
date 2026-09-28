@@ -7,22 +7,82 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200); self.end_headers()
-        self.wfile.write(b"GOLD VIP V5.3 FINAL KEEP - 38.7% WIN - Protected Important Sweep BOS CHoCH")
+        try:
+            if self.path in ["/", "/health", "/ping", "/alive"]:
+                self.wfile.write(b"GOLD VIP V5.3 FINAL KEEP - 38.7% WIN - Protected Important Sweep BOS CHoCH - ALIVE " + str(int(time.time())).encode())
+            else:
+                self.wfile.write(b"GOLD VIP V5.3 FINAL KEEP - 38.7% WIN - Protected Important Sweep BOS CHoCH")
+        except: pass
     def log_message(self,*a): return
 
 def run_server():
-    try: HTTPServer(("0.0.0.0", int(os.getenv("PORT","10000"))), H).serve_forever()
-    except: pass
-threading.Thread(target=run_server, daemon=True).start()
+    try:
+        port=int(os.getenv("PORT","10000"))
+        print(f"Starting HTTP health server on 0.0.0.0:{port} - Keep Awake trick ON")
+        HTTPServer(("0.0.0.0", port), H).serve_forever()
+    except Exception as e:
+        print(f"Server error: {e}")
+threading.Thread(target=run_server, daemon=True, name="health_server").start()
 
-def keep_alive():
+def keep_alive_trick():
+    """ULTRA KEEP AWAKE TRICK - as you requested Sunday - keeps bot alive 24/7"""
+    print("Keep Alive Trick ACTIVATED - Pinging every 2-4 min to prevent Render sleep")
     while True:
         try:
+            # 1. Ping external URL (Render self-ping)
+            ext_url=os.getenv("RENDER_EXTERNAL_URL")
+            if ext_url:
+                try:
+                    # Add random to avoid cache
+                    ping_url=ext_url.rstrip("/") + f"?ping={int(time.time())}&r={random.randint(1000,9999)}"
+                    requests.get(ping_url, timeout=10)
+                    print(f"[KeepAlive] Pinged external: {ext_url[:50]} - OK {datetime.now().strftime('%H:%M:%S')}")
+                except Exception as e:
+                    print(f"[KeepAlive] External ping fail: {e}")
+            
+            # 2. Ping localhost health endpoint (internal)
+            try:
+                port=int(os.getenv("PORT","10000"))
+                requests.get(f"http://127.0.0.1:{port}/health?keepalive={int(time.time())}", timeout=5)
+                print(f"[KeepAlive] Pinged localhost:{port}/health - OK")
+            except:
+                pass
+            
+            # 3. Heartbeat log - proves bot alive
+            print(f"[Heartbeat] Bot ALIVE - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Subscribers: {len(SUBSCRIBERS)} - Autopilot: {AUTOPILOT_ACTIVE}")
+            
+        except Exception as e:
+            print(f"[KeepAlive] Error: {e}")
+        
+        # Random interval 120-240 sec to look human, avoid Render detecting pattern
+        sleep_time=random.randint(120, 240)
+        time.sleep(sleep_time)
+
+def keep_alive_autopilot():
+    """Second keep-alive thread - ensures autopilot checks stay alive"""
+    while True:
+        try:
+            time.sleep(60)
+            if AUTOPILOT_ACTIVE:
+                print(f"[Autopilot KeepAlive] Autopilot active - {len(SUBSCRIBERS)} subscribers - {datetime.now().strftime('%H:%M:%S')}")
+        except:
+            pass
+
+threading.Thread(target=keep_alive_trick, daemon=True, name="keep_alive_trick").start()
+threading.Thread(target=keep_alive_autopilot, daemon=True, name="autopilot_keepalive").start()
+
+# Also add UptimeRobot-style extra pinger every 14 min (Render free tier sleeps after 15 min)
+def uptime_pinger():
+    while True:
+        try:
+            time.sleep(14*60)  # 14 min - just before Render 15 min sleep
             url=os.getenv("RENDER_EXTERNAL_URL")
-            if url: requests.get(url, timeout=5)
-        except: pass
-        time.sleep(240)
-threading.Thread(target=keep_alive, daemon=True).start()
+            if url:
+                requests.get(url, timeout=10)
+                print(f"[UptimeRobot] 14-min pinger - Keep Render awake {datetime.now().strftime('%H:%M:%S')}")
+        except:
+            pass
+threading.Thread(target=uptime_pinger, daemon=True, name="uptime_pinger").start()
 
 BOT_TOKEN=os.getenv("BOT_TOKEN")
 DEFAULT_CHANNEL_ID="-1004402762942"
