@@ -116,164 +116,170 @@ class StructureState:
         self.continuation_objectives=[]
 
 def build_structure_state(candles):
-    """Full V5.3: internal vs important/external, Protected, Important, BOS, CHoCH, Wick vs Close"""
+    """V5.3 PERFECT: 2-2 swings, Protected/Important, Wick vs Close, BOS/CHoCH, Transition, Advancement"""
     state=StructureState()
-    if not candles or len(candles)<15:
+    if not candles or len(candles)<20:
         return state
     
     highs, lows = find_swings_2_2(candles)
-    if len(highs)<2 and len(lows)<2:
+    if len(highs)<2 or len(lows)<2:
+        # Not enough swings, use simple structure
+        if len(highs)>=1: state.important_high=highs[-1]["price"]; state.important_high_time=highs[-1]["datetime"]
+        if len(lows)>=1: state.important_low=lows[-1]["price"]; state.important_low_time=lows[-1]["datetime"]
+        if len(highs)>=2 and len(lows)>=2:
+            # Determine trend from last swings
+            if highs[-1]["price"] > highs[-2]["price"] and lows[-1]["price"] > lows[-2]["price"]:
+                state.state="BULLISH"
+                state.protected_low=lows[-1]["price"]
+            elif highs[-1]["price"] < highs[-2]["price"] and lows[-1]["price"] < lows[-2]["price"]:
+                state.state="BEARISH"
+                state.protected_high=highs[-1]["price"]
         return state
 
-    # Track structure evolution
-    # We will walk through candles and update protected/important as BOS occurs
-    # Simplified but follows your description:
-    # - Protected Low protects bullish structure
-    # - Important High is relevant level price needs close above for bullish continuation
-    # - BOS = close through Important level in existing direction
-    # - CHoCH = close through Protected level against existing direction
-    # - Sweep = wick through + close back inside
-
-    # Initialize with first structure
-    # Find last meaningful HL that led to BOS
-    # For this implementation, we detect last BOS events and track protected
-
-    # Process chronologically to build current state
-    current_state="WAIT"
-    protected_high=None
-    protected_low=None
-    important_high=None
-    important_low=None
-    protected_high_idx=None
-    protected_low_idx=None
-    important_high_idx=None
-    important_low_idx=None
+    # Get last 6 swings for recent structure
+    recent_highs=highs[-4:]
+    recent_lows=lows[-4:]
+    
+    # Current price
+    last_close=candles[-1]["close"]
+    last_high_candle=candles[-1]["high"]
+    last_low_candle=candles[-1]["low"]
+    
+    # Important High/Low = last significant swing (most recent)
+    state.important_high=highs[-1]["price"]
+    state.important_high_time=highs[-1]["datetime"]
+    state.important_low=lows[-1]["price"]
+    state.important_low_time=lows[-1]["datetime"]
+    
+    # Determine HH/HL/LH/LL for last swings to set initial state
+    # Compare last 2 highs and lows
+    hh = highs[-1]["price"] > highs[-2]["price"] if len(highs)>=2 else False
+    hl = lows[-1]["price"] > lows[-2]["price"] if len(lows)>=2 else False
+    lh = highs[-1]["price"] < highs[-2]["price"] if len(highs)>=2 else False
+    ll = lows[-1]["price"] < lows[-2]["price"] if len(lows)>=2 else False
+    
+    if hh and hl:
+        state.state="BULLISH"
+        state.protected_low=lows[-1]["price"]  # Last HL is protected low
+        state.protected_low_time=lows[-1]["datetime"]
+    elif ll and lh:
+        state.state="BEARISH"
+        state.protected_high=highs[-1]["price"]  # Last LH is protected high
+        state.protected_high_time=highs[-1]["datetime"]
+    elif hl and not ll:
+        state.state="BULLISH"
+        state.protected_low=lows[-1]["price"]
+    elif lh and not hh:
+        state.state="BEARISH"
+        state.protected_high=highs[-1]["price"]
+    else:
+        # Ranging - check previous structure
+        # Look at last 20 candles for BOS/CHoCH to determine state
+        state.state="WAIT"
+    
+    # Now detect BOS and CHoCH and Sweeps by scanning last 30 candles
+    sweeps=[]
     last_bos=None
     last_choch=None
-    sweeps=[]
-
-    # We need to detect BOS/CHoCH in order
-    # Walk through candles from start to end
-    for i in range(10, len(candles)):
-        hist=candles[:i]
-        h_swings, l_swings = find_swings_2_2(hist)
-        if len(h_swings)<1 or len(l_swings)<1:
-            continue
-        # Current close
-        close=candles[i-1]["close"]
-        high=candles[i-1]["high"]
-        low=candles[i-1]["low"]
-
-        # Determine important levels as last significant swing
-        # Important High = last significant High, Important Low = last significant Low
-        # For simplicity, use recent swing highs/lows
-        if h_swings:
-            candidate_important_high = h_swings[-1]
-        else:
-            candidate_important_high = None
-        if l_swings:
-            candidate_important_low = l_swings[-1]
-        else:
-            candidate_important_low = None
-
-        # If no protected yet, set initial
-        if protected_high is None and h_swings:
-            protected_high = h_swings[-1]["price"]
-            protected_high_idx = h_swings[-1]["index"]
-        if protected_low is None and l_swings:
-            protected_low = l_swings[-1]["price"]
-            protected_low_idx = l_swings[-1]["index"]
-
-        # Detect Sweeps vs BOS vs CHoCH
+    current_state=state.state
+    
+    # For sweep detection, need important levels from 10 candles ago
+    # Use second last swing as important for sweep check
+    important_high_for_sweep = highs[-2]["price"] if len(highs)>=2 else highs[-1]["price"]
+    important_low_for_sweep = lows[-2]["price"] if len(lows)>=2 else lows[-1]["price"]
+    
+    # Scan last 30 candles for BOS/CHoCH/Sweep events
+    for i in range(max(0, len(candles)-30), len(candles)):
+        c=candles[i]
+        close=c["close"]; high=c["high"]; low=c["low"]
+        
         # BUY SIDE SWEEP: wick above Important High but close below
-        if important_high and high > important_high["price"] and close < important_high["price"]:
-            sweeps.append({"type":"BUY_SWEEP", "level":important_high["price"], "datetime":candles[i-1]["datetime"], "wick":high, "close":close})
+        if high > important_high_for_sweep + 0.3 and close < important_high_for_sweep:
+            sweeps.append({"type":"BUY_SWEEP", "level":important_high_for_sweep, "datetime":c["datetime"], "wick":high, "close":close})
         
         # SELL SIDE SWEEP: wick below Important Low but close above
-        if important_low and low < important_low["price"] and close > important_low["price"]:
-            sweeps.append({"type":"SELL_SWEEP", "level":important_low["price"], "datetime":candles[i-1]["datetime"], "wick":low, "close":close})
-
-        # BEARISH BOS: close below Important Low (in bearish direction)
-        if important_low and close < important_low["price"] - 0.5:  # 0.5 buffer for close confirmation
-            # This is BOS if structure was bearish or transition
-            if current_state in ["BEARISH", "TRANSITION_TO_BEARISH", "WAIT"] or important_low["price"] < (protected_low or 999999):
-                last_bos={"type":"BEARISH_BOS", "level":important_low["price"], "datetime":candles[i-1]["datetime"], "price":close}
-                # Advance structure: meaningful LH becomes new Protected High
-                # Find last LH before this BOS
-                # For simplicity, last high becomes protected high
-                if h_swings:
-                    protected_high = h_swings[-1]["price"]
-                    protected_high_idx = h_swings[-1]["index"]
-                # Important Low advances to next low
-                # Find next low after BOS would be new important, but for now keep
-                current_state="BEARISH"
-                # Update important low to next structure
-                important_low = candidate_important_low
-                important_low_idx = candidate_important_low["index"] if candidate_important_low else None
-
+        if low < important_low_for_sweep - 0.3 and close > important_low_for_sweep:
+            sweeps.append({"type":"SELL_SWEEP", "level":important_low_for_sweep, "datetime":c["datetime"], "wick":low, "close":close})
+        
+        # BEARISH BOS: close below Important Low (requires close confirmation)
+        if close < important_low_for_sweep - 0.8:
+            last_bos={"type":"BEARISH_BOS", "level":important_low_for_sweep, "datetime":c["datetime"], "price":close}
+            current_state="BEARISH"
+            # Advance: LH becomes new Protected High
+            # Find last high before this BOS
+            for h in reversed(highs):
+                if h["index"] < i:
+                    state.protected_high=h["price"]
+                    state.protected_high_time=h["datetime"]
+                    break
+            # Important Low advances to this low
+            state.important_low=low
+            state.important_low_time=c["datetime"]
+        
         # BULLISH BOS: close above Important High
-        if important_high and close > important_high["price"] + 0.5:
-            if current_state in ["BULLISH", "TRANSITION_TO_BULLISH", "WAIT"] or important_high["price"] > (protected_high or 0):
-                last_bos={"type":"BULLISH_BOS", "level":important_high["price"], "datetime":candles[i-1]["datetime"], "price":close}
-                if l_swings:
-                    protected_low = l_swings[-1]["price"]
-                    protected_low_idx = l_swings[-1]["index"]
-                current_state="BULLISH"
-                important_high = candidate_important_high
-                important_high_idx = candidate_important_high["index"] if candidate_important_high else None
-
-        # BEARISH CHoCH: close below Protected Low (against bullish structure)
-        if protected_low and close < protected_low - 0.5:
-            if current_state in ["BULLISH", "TRANSITION_TO_BULLISH"]:
-                last_choch={"type":"BEARISH_CHoCH", "level":protected_low, "datetime":candles[i-1]["datetime"], "price":close}
+        if close > important_high_for_sweep + 0.8:
+            last_bos={"type":"BULLISH_BOS", "level":important_high_for_sweep, "datetime":c["datetime"], "price":close}
+            current_state="BULLISH"
+            for l in reversed(lows):
+                if l["index"] < i:
+                    state.protected_low=l["price"]
+                    state.protected_low_time=l["datetime"]
+                    break
+            state.important_high=high
+            state.important_high_time=c["datetime"]
+        
+        # BEARISH CHoCH: close below Protected Low (against bullish)
+        if state.protected_low and close < state.protected_low - 0.8:
+            if current_state in ["BULLISH"]:
+                last_choch={"type":"BEARISH_CHoCH", "level":state.protected_low, "datetime":c["datetime"], "price":close}
                 current_state="TRANSITION_TO_BEARISH"
-            elif current_state=="BEARISH":
-                # Already bearish, this is continuation
-                pass
-
-        # BULLISH CHoCH: close above Protected High (against bearish structure)
-        if protected_high and close > protected_high + 0.5:
-            if current_state in ["BEARISH", "TRANSITION_TO_BEARISH"]:
-                last_choch={"type":"BULLISH_CHoCH", "level":protected_high, "datetime":candles[i-1]["datetime"], "price":close}
+        
+        # BULLISH CHoCH: close above Protected High (against bearish)
+        if state.protected_high and close > state.protected_high + 0.8:
+            if current_state in ["BEARISH"]:
+                last_choch={"type":"BULLISH_CHoCH", "level":state.protected_high, "datetime":c["datetime"], "price":close}
                 current_state="TRANSITION_TO_BULLISH"
 
-        # Update important levels for next iteration
-        if candidate_important_high and (important_high is None or candidate_important_high["index"] > (important_high_idx or -1)):
-            # Only update if new structure advanced
-            if last_bos and last_bos["type"]=="BULLISH_BOS":
-                important_high = candidate_important_high
-                important_high_idx = candidate_important_high["index"]
-        if candidate_important_low and (important_low is None or candidate_important_low["index"] > (important_low_idx or -1)):
-            if last_bos and last_bos["type"]=="BEARISH_BOS":
-                important_low = candidate_important_low
-                important_low_idx = candidate_important_low["index"]
-
-    # Final state build from last 20 candles for current levels
-    highs, lows = find_swings_2_2(candles)
-    # Current important levels = last swings
-    if highs:
-        state.important_high = highs[-1]["price"]
-        state.important_high_time = highs[-1]["datetime"]
-    if lows:
-        state.important_low = lows[-1]["price"]
-        state.important_low_time = lows[-1]["datetime"]
-
-    state.state=current_state
-    state.protected_high=protected_high
-    state.protected_low=protected_low
-    state.important_high=state.important_high
-    state.important_low=state.important_low
+    # If we found BOS, use it to set final state and protected
+    if last_bos:
+        if last_bos["type"]=="BULLISH_BOS":
+            state.state="BULLISH"
+            # Protected Low = last HL that caused BOS (last low)
+            if lows:
+                state.protected_low=lows[-1]["price"]
+                state.protected_low_time=lows[-1]["datetime"]
+        elif last_bos["type"]=="BEARISH_BOS":
+            state.state="BEARISH"
+            if highs:
+                state.protected_high=highs[-1]["price"]
+                state.protected_high_time=highs[-1]["datetime"]
+    elif last_choch:
+        state.state=last_choch["type"].replace("CHoCH","").replace("_","").strip()  # Keep transition state
+        if "BEARISH_CHoCH" in last_choch["type"]:
+            state.state="TRANSITION_TO_BEARISH"
+        else:
+            state.state="TRANSITION_TO_BULLISH"
+    else:
+        # No BOS/CHoCH in last 30 candles, keep trend from HH/HL
+        pass
+    
+    # Ensure protected levels exist
+    if state.state=="BULLISH" and not state.protected_low and lows:
+        state.protected_low=lows[-1]["price"]
+    if state.state=="BEARISH" and not state.protected_high and highs:
+        state.protected_high=highs[-1]["price"]
+    
     state.last_bos=last_bos
     state.last_choch=last_choch
-    state.sweeps=sweeps[-10:]  # last 10 sweeps
-    # Determine protected from last meaningful HL/LH that caused BOS
-    # For simplicity, protected = last opposite swing that caused BOS
-    if last_bos:
-        if last_bos["type"]=="BULLISH_BOS" and lows:
-            state.protected_low = lows[-1]["price"] if len(lows)>=1 else protected_low
-        if last_bos["type"]=="BEARISH_BOS" and highs:
-            state.protected_high = highs[-1]["price"] if len(highs)>=1 else protected_high
-
+    state.sweeps=sweeps[-10:]
+    
+    # Continuation: if state is WAIT but we have recent trend, use it
+    if state.state=="WAIT":
+        if hh and hl:
+            state.state="BULLISH"
+        elif ll and lh:
+            state.state="BEARISH"
+    
     return state
 
 def get_gold_v53():
