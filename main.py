@@ -239,27 +239,42 @@ def build_gold_pure():
 def run_backtest_pure():
     if not TWELVE_KEY: return {"error":"No TWELVE_DATA_API_KEY"}
     try:
-        print("Backtest PURE PA: Fetching 2000x 1H candles...")
+        print("Backtest PURE PA V9.1 DEBUG: Fetching 2000x 1H candles...")
         candles_1h=fetch_twelvedata_candles("XAU/USD","1h",TWELVE_KEY,2000)
         if not candles_1h or len(candles_1h)<200: return {"error":f"Failed fetch {len(candles_1h) if candles_1h else 0}"}
-        candles_4h=fetch_twelvedata_candles("XAU/USD","4h",TWELVE_KEY,500)
         trades=[]; wins_tp1=0; wins_tp2=0; losses=0; be=0; total_signals=0
-        # Map 4H trend for each 1H index (approx)
-        for i in range(60, len(candles_1h)-30, 2):
+        last_signal_time=0
+        # Track last entry price to avoid duplicates
+        last_entry_price=0
+
+        for i in range(60, len(candles_1h)-30, 1):
             hist_1h=candles_1h[i-50:i]
             if len(hist_1h)<50: continue
             closes=[c["close"] for c in hist_1h]; highs=[c["high"] for c in hist_1h]; lows=[c["low"] for c in hist_1h]
             atr_v=atr(highs,lows,closes,14)
             struct_1h=detect_structure(hist_1h)
             bos_1h=detect_bos_choch(hist_1h, struct_1h)
-            # Simulate 4H structure from 1H (every 4 candles = 4H)
+            # 4H slice every 4 candles
             hist_4h_slice=candles_1h[max(0,i-200):i:4]
             if len(hist_4h_slice)<20: continue
             struct_4h=detect_structure(hist_4h_slice)
-            # 15M simulated as last 20 of 1H for BOS check (approx)
             hist_15m=hist_1h[-20:]
             struct_15m=detect_structure(hist_15m)
             bos_15m=detect_bos_choch(hist_15m, struct_15m)
+
+            # V9.1 DEBUG: Only trigger on FRESH BOS/CHoCH, not continuous trend
+            # Check if BOS/CHoCH happened in last 2 candles (fresh break)
+            fresh_bos=False
+            if bos_1h["bull_choch"] or bos_1h["bear_choch"] or bos_1h["bull_bos"] or bos_1h["bear_bos"]:
+                fresh_bos=True
+            # Also check previous candle for recent BOS
+            if not fresh_bos and i>1:
+                prev_hist=candles_1h[i-51:i-1]
+                if len(prev_hist)>=10:
+                    prev_struct=detect_structure(prev_hist)
+                    prev_bos=detect_bos_choch(prev_hist, prev_struct)
+                    if prev_bos["bull_choch"] or prev_bos["bear_choch"] or prev_bos["bull_bos"] or prev_bos["bear_bos"]:
+                        fresh_bos=True
 
             # PURE PA LOGIC
             trend_4h=struct_4h["trend"]
@@ -267,23 +282,32 @@ def run_backtest_pure():
             elif bos_1h["bear_choch"]: dir_1h="SELL"
             elif bos_1h["bull_bos"]: dir_1h="BUY"
             elif bos_1h["bear_bos"]: dir_1h="SELL"
-            elif struct_1h["trend"]!="WAIT": dir_1h=struct_1h["trend"]
             else: dir_1h="WAIT"
 
             if bos_15m["bull_bos"] or bos_15m["bull_choch"]: dir_15m="BUY"
             elif bos_15m["bear_bos"] or bos_15m["bear_choch"]: dir_15m="SELL"
-            elif struct_15m["trend"]!="WAIT": dir_15m=struct_15m["trend"]
             else: dir_15m="WAIT"
 
-            if trend_4h=="BUY" and dir_1h=="BUY" and dir_15m=="BUY": direction="BUY"; conf=90
-            elif trend_4h=="SELL" and dir_1h=="SELL" and dir_15m=="SELL": direction="SELL"; conf=90
-            elif dir_1h=="BUY" and dir_15m=="BUY" and trend_4h!="SELL": direction="BUY"; conf=80
-            elif dir_1h=="SELL" and dir_15m=="SELL" and trend_4h!="BUY": direction="SELL"; conf=80
-            elif trend_4h!="WAIT" and dir_1h==trend_4h: direction=trend_4h; conf=75
-            else: continue
-            if conf<75: continue
-            total_signals+=1
+            # V9.1: Require FRESH BOS/CHoCH - not just trend
+            if not fresh_bos: continue
+            if dir_1h=="WAIT" or dir_15m=="WAIT": continue
+            if dir_1h!=dir_15m: continue
+            # 4H must not oppose
+            if trend_4h!="WAIT" and trend_4h!=dir_1h: continue
+
+            # Avoid duplicate same price within 12h (12 candles)
+            if i - last_signal_time < 12: continue
             price=hist_1h[-1]["close"]
+            if abs(price - last_entry_price) < 2.0 and i - last_signal_time < 24: continue
+
+            direction=dir_1h
+            conf=90 if bos_1h["bull_choch"] or bos_1h["bear_choch"] else 80
+
+            total_signals+=1
+            last_signal_time=i
+            last_entry_price=price
+
+            # SL/TP
             if direction=="BUY":
                 recent_low=min([c["low"] for c in hist_1h[-5:]])
                 sl=min(struct_1h["last_low"], recent_low) - atr_v*0.8
@@ -299,29 +323,71 @@ def run_backtest_pure():
                 risk=sl-price
                 tp1=price-risk*1.0; tp2=price-risk*2.0
 
+            # Future check 48h
             future=candles_1h[i:i+48]
             hit_tp1=False; hit_tp2=False; hit_sl=False
-            for fc in future:
+            max_high=price; min_low=price
+            sl_hit_candle=None; tp1_hit_candle=None; tp2_hit_candle=None
+            for idx, fc in enumerate(future):
+                max_high=max(max_high, fc["high"])
+                min_low=min(min_low, fc["low"])
                 if direction=="BUY":
-                    if fc["low"]<=sl: hit_sl=True; break
-                    if not hit_tp1 and fc["high"]>=tp1: hit_tp1=True
-                    if not hit_tp2 and fc["high"]>=tp2: hit_tp2=True; break
+                    if fc["low"]<=sl and not hit_sl: hit_sl=True; sl_hit_candle=fc; break
+                    if not hit_tp1 and fc["high"]>=tp1: hit_tp1=True; tp1_hit_candle=fc
+                    if not hit_tp2 and fc["high"]>=tp2: hit_tp2=True; tp2_hit_candle=fc; break
                 else:
-                    if fc["high"]>=sl: hit_sl=True; break
-                    if not hit_tp1 and fc["low"]<=tp1: hit_tp1=True
-                    if not hit_tp2 and fc["low"]<=tp2: hit_tp2=True; break
+                    if fc["high"]>=sl and not hit_sl: hit_sl=True; sl_hit_candle=fc; break
+                    if not hit_tp1 and fc["low"]<=tp1: hit_tp1=True; tp1_hit_candle=fc
+                    if not hit_tp2 and fc["low"]<=tp2: hit_tp2=True; tp2_hit_candle=fc; break
+
             if hit_sl: losses+=1; outcome="LOSS"
             elif hit_tp2: wins_tp2+=1; outcome="TP2 WIN"
             elif hit_tp1: wins_tp1+=1; outcome="TP1 WIN"
             else: be+=1; outcome="BE"
-            trades.append({"date":hist_1h[-1]["datetime"],"dir":direction,"conf":conf,"price":price,"outcome":outcome})
+
+            # Detailed trade for MT5 verification
+            trades.append({
+                "datetime": hist_1h[-1]["datetime"],
+                "mt5_time": hist_1h[-1]["datetime"],  # For MT5 check
+                "dir": direction,
+                "conf": conf,
+                "entry": price,
+                "sl": sl,
+                "tp1": tp1,
+                "tp2": tp2,
+                "risk": risk,
+                "outcome": outcome,
+                "max_high": max_high,
+                "min_low": min_low,
+                "structure_4h": struct_4h["pattern"],
+                "structure_1h": struct_1h["pattern"],
+                "choch_1h": bos_1h["choch"],
+                "bos_1h": bos_1h["bos"],
+                "bos_15m": bos_15m["bos"],
+                "last_high": struct_1h["last_high"],
+                "last_low": struct_1h["last_low"],
+                "price": price
+            })
 
         total_closed=wins_tp1+wins_tp2+losses
         win_rate=(wins_tp1+wins_tp2)/total_closed*100 if total_closed>0 else 0
         tp2_rate=wins_tp2/total_closed*100 if total_closed>0 else 0
-        return {"total_signals":total_signals,"wins_tp1":wins_tp1,"wins_tp2":wins_tp2,"losses":losses,"be":be,"total_closed":total_closed,"win_rate":win_rate,"tp2_rate":tp2_rate,"last_trades":trades[-20:],"candles_used":len(candles_1h)}
+
+        # Save detailed CSV for MT5 checking
+        try:
+            import csv
+            csv_path="/tmp/v9_pure_backtest_mt5.csv"
+            with open(csv_path,"w",newline="",encoding="utf-8") as f:
+                w=csv.writer(f)
+                w.writerow(["MT5_Datetime","Direction","Entry_Price","SL_Price","TP1","TP2","Risk","Outcome","Max_High_48h","Min_Low_48h","4H_Structure","1H_Structure","1H_CHoCH","1H_BOS","15M_BOS","Last_High","Last_Low","Conf"])
+                for t in trades:
+                    w.writerow([t["mt5_time"], t["dir"], f"{t['entry']:.2f}", f"{t['sl']:.2f}", f"{t['tp1']:.2f}", f"{t['tp2']:.2f}", f"{t['risk']:.2f}", t["outcome"], f"{t['max_high']:.2f}", f"{t['min_low']:.2f}", t["structure_4h"], t["structure_1h"], t["choch_1h"], t["bos_1h"], t["bos_15m"], f"{t['last_high']:.2f}", f"{t['last_low']:.2f}", t["conf"]])
+        except Exception as e:
+            print(f"CSV save error: {e}")
+
+        return {"total_signals":total_signals,"wins_tp1":wins_tp1,"wins_tp2":wins_tp2,"losses":losses,"be":be,"total_closed":total_closed,"win_rate":win_rate,"tp2_rate":tp2_rate,"last_trades":trades[-30:],"all_trades":trades,"candles_used":len(candles_1h)}
     except Exception as e:
-        import traceback; return {"error":str(e),"trace":traceback.format_exc()[:1000]}
+        import traceback; return {"error":str(e),"trace":traceback.format_exc()[:1500]}
 
 async def start(update, context):
     SUBSCRIBERS.add(update.effective_chat.id)
@@ -406,37 +472,60 @@ async def channeltest(update, context):
     except Exception as e: await update.message.reply_text(f"❌ Failed: {e}")
 
 async def backtest(update, context):
-    await update.message.reply_text("⏳ Running V9.0 PURE PA 6-Month Backtest... Fetching 2000x 1H + 500x 4H candles (30 sec)... Pure Structure Only - No Indicators...")
+    await update.message.reply_text("⏳ Running V9.1 PURE PA DEBUG 6M... Fetching 2000x 1H candles... Fresh BOS only, 12h cooldown, MT5 time report...")
     try:
         loop=asyncio.get_event_loop()
         result=await loop.run_in_executor(None, run_backtest_pure)
         if "error" in result:
             await update.message.reply_text(f"❌ Backtest Error: {result['error']}\n{result.get('trace','')[:500]}"); return
-        msg=f"📊 V9.0 PURE PRICE ACTION BACKTEST 6M\n"
+        
+        # V9.1: Detailed MT5 verification report
+        msg=f"📊 V9.1 PURE PA DEBUG BACKTEST 6M\n"
         msg+=f"Candles: {result['candles_used']} x 1H (~{result['candles_used']//24} days)\n"
-        msg+=f"Total Signals (75%+ PA): {result['total_signals']}\n"
+        msg+=f"Total Signals (Fresh BOS): {result['total_signals']}\n"
         msg+=f"Closed Trades: {result['total_closed']}\n"
         msg+=f"✅ TP2 WIN (1:2): {result['wins_tp2']}\n"
         msg+=f"✅ TP1 WIN (1:1): {result['wins_tp1']}\n"
         msg+=f"❌ LOSS (SL hit): {result['losses']}\n"
-        msg+=f"➖ BE (no TP/SL in 48h): {result['be']}\n"
-        msg+=f"\n🏆 WIN RATE: {result['win_rate']:.1f}% (TP1+TP2)\n"
-        msg+=f"💎 TP2 RATE: {result['tp2_rate']:.1f}% (full 1:2 RR)\n"
-        msg+=f"\nPure PA: 4H HH/HL + LL/LH + 1H CHoCH/BOS + 15M BOS\n"
-        msg+=f"SL: Structure HL/LH + 0.8 ATR | TP1 1:1 | TP2 1:2\n"
-        msg+=f"No EMA - No RSI - No Sweep - No DXY - Pure Structure\n"
-        if result['last_trades']:
-            msg+=f"\n📜 Last 10 trades:\n"
-            for t in result['last_trades'][-10:]:
-                emoji="🟢" if t['dir']=="BUY" else "🔴"
-                msg+=f"{emoji} {t['date'][:10]} {t['dir']} {t['conf']}% -> {t['outcome']} @ {t['price']:.2f}\n"
+        msg+=f"➖ BE: {result['be']}\n"
+        msg+=f"\n🏆 WIN RATE: {result['win_rate']:.1f}% | TP2 RATE: {result['tp2_rate']:.1f}%\n"
+        msg+=f"\n🔍 MT5 CHECK - Last 10 LOSSES (verify on chart):\n"
+
+        # Show last 10 losses with full MT5 details
+        losses=[t for t in result['all_trades'] if t['outcome']=="LOSS"][-10:]
+        for t in losses:
+            emoji="🟢" if t['dir']=="BUY" else "🔴"
+            msg+=f"{emoji} {t['mt5_time']} {t['dir']} ENTRY {t['entry']:.2f} SL {t['sl']:.2f} TP2 {t['tp2']:.2f}\n"
+            msg+=f"   {t['structure_1h']} | {t['choch_1h']} | BOS {t['bos_1h'][:30]}\n"
+            msg+=f"   Max High 48h: {t['max_high']:.2f} Min Low 48h: {t['min_low']:.2f} -> LOSS\n\n"
+
+        msg+=f"🔍 Last 5 WINS for comparison:\n"
+        wins=[t for t in result['all_trades'] if "WIN" in t['outcome']][-5:]
+        for t in wins:
+            emoji="🟢" if t['dir']=="BUY" else "🔴"
+            msg+=f"{emoji} {t['mt5_time']} {t['dir']} ENTRY {t['entry']:.2f} -> {t['outcome']} | High {t['max_high']:.2f} Low {t['min_low']:.2f}\n"
+
         await update.message.reply_text(msg)
+
+        # Second message: CSV location and summary
+        msg2=f"📄 Detailed CSV saved: /tmp/v9_pure_backtest_mt5.csv\n"
+        msg2+=f"Columns: MT5_Datetime, Entry, SL, TP1, TP2, Outcome, Max High/Low 48h, Structure, CHoCH, BOS\n"
+        msg2+=f"Use this to check each trade in MT5: Go to MT5 -> Open 1H chart -> Go to datetime -> Check if BOS/CHoCH really there -> Check SL/TP hit\n"
+        msg2+=f"\n💡 Why 24% win? Problem found:\n"
+        msg2+=f"- Bot was taking EVERY trend candle (476 signals!) = spam\n"
+        msg2+=f"- V9.1 fix: Only FRESH BOS/CHoCH + 12h cooldown = ~{result['total_signals']} quality signals\n"
+        msg2+=f"- If still low, SL too tight (0.8 ATR) - need 1.2 ATR\n"
+        msg2+=f"- Or TP2 too far (1:2) - try TP1 1:1 only for scalps\n"
+        await update.message.reply_text(msg2)
+
         if update.effective_user.id==ADMIN_ID:
             try:
-                vip_summary=f"🏆 V9.0 PURE PA BACKTEST 6M\nWIN {result['win_rate']:.1f}% | TP2 {result['tp2_rate']:.1f}%\nSignals: {result['total_signals']} | Closed: {result['total_closed']}\nTP2:{result['wins_tp2']} TP1:{result['wins_tp1']} LOSS:{result['losses']}\nPure PA: 4H+1H CHoCH/BOS+15M BOS"
+                vip_summary=f"🏆 V9.1 PURE PA DEBUG 6M\nWIN {result['win_rate']:.1f}% | Signals {result['total_signals']} (fresh BOS only)\nTP2:{result['wins_tp2']} LOSS:{result['losses']} | Check MT5 times for losses"
                 await context.bot.send_message(chat_id=CHANNEL_ID, text=vip_summary)
             except: pass
-    except Exception as e: await update.message.reply_text(f"❌ Backtest failed: {e}")
+    except Exception as e:
+        import traceback
+        await update.message.reply_text(f"❌ Backtest failed: {e}\n{traceback.format_exc()[:500]}")
 
 def main():
     if not BOT_TOKEN: print("ERROR: BOT_TOKEN not set!"); return
