@@ -1,7 +1,54 @@
 import os, threading, asyncio, time, requests, random
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from datetime import datetime
+from datetime import datetime, timedelta
 from telegram import Update
+
+# ============ TIME ALIGNMENT: NIGERIAN WAT + MT5 BROKER TIME ============
+# TwelveData returns UTC time
+# Nigerian WAT = UTC+1
+# MT5 Broker time = Typically GMT+3 (most brokers) - can be GMT+2 in winter
+# User is in Port Harcourt, Nigeria
+
+def convert_timezones(utc_datetime_str):
+    """Convert UTC time from TwelveData to Nigerian WAT and MT5 broker time"""
+    try:
+        # Parse UTC datetime string like "2026-08-25 23:00:00"
+        if isinstance(utc_datetime_str, str):
+            dt_utc = datetime.strptime(utc_datetime_str, "%Y-%m-%d %H:%M:%S")
+        else:
+            dt_utc = utc_datetime_str
+        
+        # Nigerian WAT = UTC+1
+        dt_wat = dt_utc + timedelta(hours=1)
+        # MT5 Broker = UTC+3 (most Gold brokers use GMT+3, some GMT+2)
+        dt_mt5_gmt3 = dt_utc + timedelta(hours=3)
+        dt_mt5_gmt2 = dt_utc + timedelta(hours=2)
+        
+        return {
+            "utc": dt_utc.strftime("%Y-%m-%d %H:%M:%S UTC"),
+            "wat": dt_wat.strftime("%Y-%m-%d %H:%M:%S WAT (Nigeria)"),
+            "mt5_gmt3": dt_mt5_gmt3.strftime("%Y-%m-%d %H:%M:%S MT5 GMT+3"),
+            "mt5_gmt2": dt_mt5_gmt2.strftime("%Y-%m-%d %H:%M:%S MT5 GMT+2"),
+            "wat_short": dt_wat.strftime("%d/%m %H:%M WAT"),
+            "mt5_short_gmt3": dt_mt5_gmt3.strftime("%d/%m %H:%M MT5"),
+            "mt5_short_gmt2": dt_mt5_gmt2.strftime("%d/%m %H:%M MT5 GMT+2"),
+        }
+    except Exception as e:
+        return {
+            "utc": str(utc_datetime_str),
+            "wat": str(utc_datetime_str) + " (UTC+1 WAT)",
+            "mt5_gmt3": str(utc_datetime_str) + " (UTC+3 MT5)",
+            "mt5_gmt2": str(utc_datetime_str) + " (UTC+2 MT5)",
+            "wat_short": str(utc_datetime_str),
+            "mt5_short_gmt3": str(utc_datetime_str),
+            "mt5_short_gmt2": str(utc_datetime_str),
+        }
+
+def get_current_times():
+    """Get current time in all timezones for signal"""
+    now_utc = datetime.utcnow()
+    return convert_timezones(now_utc.strftime("%Y-%m-%d %H:%M:%S"))
+
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 class H(BaseHTTPRequestHandler):
@@ -321,7 +368,8 @@ def build_setup_v53():
     else:
         sl=price-10; tp1=price+10; tp2=price+20; tp3=price+30; risk=10
 
-    now=datetime.now().strftime("%H:%M:%S %d/%m")
+    times = get_current_times()
+    now = f"{times['wat_short']} | {times['mt5_short_gmt3']} | {times['utc']}"
     src="TwelveData" if data["use_td"] else "No Data"
     lines=[]
     lines.append(f"🏆 GOLD VIP V5.3 FINAL KEEP {src} 🏆")
@@ -687,7 +735,8 @@ def build_setup_2tf():
     else:
         sl=price-10; tp1=price+10; tp2=price+20; tp3=price+30; risk=10
 
-    now=datetime.now().strftime("%H:%M:%S %d/%m")
+    times = get_current_times()
+    now = f"{times['wat_short']} | {times['mt5_short_gmt3']} | {times['utc']}"
     src="TwelveData" if data["use_td"] else "No Data"
     lines=[]
     lines.append(f"🏆 GOLD VIP V5.3 2TF (4H+1H ONLY) {src} 🏆")
@@ -759,7 +808,7 @@ def build_setup_2tf():
 def run_backtest_2tf():
     if not TWELVE_KEY: return {"error":"No TWELVE_DATA_API_KEY"}
     try:
-        print("Backtest V5.4 FULL: Return to 4H LH/HL + Form + Location (Both Trends)...")
+        print("Backtest V5.6 CORRECT MT5 BOTH TRENDS - Proper HL that created HH...")
         candles_1h=fetch_twelvedata_candles("XAU/USD","1h",TWELVE_KEY,2000)
         if not candles_1h or len(candles_1h)<200: return {"error":f"Failed fetch {len(candles_1h) if candles_1h else 0}"}
         trades=[]; wins_tp1=0; wins_tp2=0; losses=0; be=0
@@ -779,49 +828,84 @@ def run_backtest_2tf():
             h4_hl = state_4h.protected_low
             h4_hh = state_4h.important_high or state_4h.protected_high
             
+            # V5.6 CORRECT: Find HL that created HH that went to 4H LH - BOTH trends
             h1_returned_to_lh=False; h1_returned_to_hl=False
+            hl_that_created_hh = None
+            lh_that_created_ll = None
+            
             if len(hist_1h)>=20:
                 recent_20=hist_1h[-20:]
-                recent_high=max(c["high"] for c in recent_20)
-                recent_low=min(c["low"] for c in recent_20)
+                # BEARISH: Find HH that touched LH
+                max_high_val = -1
+                max_high_idx = -1
+                for idx, c in enumerate(recent_20):
+                    if c["high"] > max_high_val:
+                        max_high_val = c["high"]
+                        max_high_idx = idx
                 if h4_lh and h4_ll and h4_lh > h4_ll:
-                    if recent_high >= h4_lh - 50 and recent_high <= h4_lh + 20:
+                    if max_high_val >= h4_lh - 50 and max_high_val <= h4_lh + 20:
                         h1_returned_to_lh=True
+                        # Find HL that created that HH: min low before HH
+                        min_low_before = 999999
+                        for idx in range(0, max_high_idx):
+                            if recent_20[idx]["low"] < min_low_before:
+                                min_low_before = recent_20[idx]["low"]
+                        hl_that_created_hh = min_low_before if min_low_before != 999999 else None
+                
+                # BULLISH: Find LL that touched HL
+                min_low_val = 999999
+                min_low_idx = -1
+                for idx, c in enumerate(recent_20):
+                    if c["low"] < min_low_val:
+                        min_low_val = c["low"]
+                        min_low_idx = idx
                 if h4_hl and h4_hh and h4_hh > h4_hl:
-                    if recent_low <= h4_hl + 50 and recent_low >= h4_hl - 20:
+                    if min_low_val <= h4_hl + 50 and min_low_val >= h4_hl - 20:
                         h1_returned_to_hl=True
+                        # Find LH that created that LL: max high before LL
+                        max_high_before = -1
+                        for idx in range(0, min_low_idx):
+                            if recent_20[idx]["high"] > max_high_before:
+                                max_high_before = recent_20[idx]["high"]
+                        lh_that_created_ll = max_high_before if max_high_before != -1 else None
             
             price_now=hist_1h[-1]["close"]
             
+            # BULLISH: Must break LH that created LL that went to HL + location 0-70% around HL
             if state_1h.state=="BULLISH" and state_1h.last_bos and state_1h.last_bos["type"]=="BULLISH_BOS":
                 level=state_1h.last_bos["level"]; bos_price=state_1h.last_bos["price"]
-                if bos_price and level and bos_price > level + 0.5 and price_now > level:
+                check_level = lh_that_created_ll if lh_that_created_ll else level
+                if bos_price and check_level and bos_price > check_level + 0.5 and price_now > check_level:
                     if h4_hl and h4_hh and h4_hh > h4_hl:
                         range_4h=h4_hh - h4_hl
                         if range_4h>20:
                             dist=price_now - h4_hl; pct=(dist/range_4h)*100
-                            if dist>=0 and pct<=70 and h1_returned_to_hl:
+                            if dist>=0 and pct<=70 and h1_returned_to_hl and lh_that_created_ll:
                                 h1_has_bullish=True
                         else:
-                            if h1_returned_to_hl:
+                            if h1_returned_to_hl and lh_that_created_ll:
                                 h1_has_bullish=True
                     else:
-                        h1_has_bullish=True
+                        if h1_returned_to_hl and lh_that_created_ll:
+                            h1_has_bullish=True
             
+            # BEARISH: Must break HL that created HH that went to LH + location 0-70% around LH
             if state_1h.state=="BEARISH" and state_1h.last_bos and state_1h.last_bos["type"]=="BEARISH_BOS":
                 level=state_1h.last_bos["level"]; bos_price=state_1h.last_bos["price"]
-                if bos_price and level and bos_price < level - 0.5 and price_now < level:
+                check_level = hl_that_created_hh if hl_that_created_hh else level
+                if bos_price and check_level and bos_price < check_level - 0.5 and price_now < check_level:
                     if h4_lh and h4_ll and h4_lh > h4_ll:
                         range_4h=h4_lh - h4_ll
                         if range_4h>20:
                             dist=h4_lh - price_now; pct=(dist/range_4h)*100
-                            if dist>=0 and pct<=70 and h1_returned_to_lh:
+                            if dist>=0 and pct<=70 and h1_returned_to_lh and hl_that_created_hh:
                                 h1_has_bearish=True
                         else:
-                            if h1_returned_to_lh:
+                            if h1_returned_to_lh and hl_that_created_hh:
                                 h1_has_bearish=True
                     else:
-                        h1_has_bearish=True
+                        if h1_returned_to_lh and hl_that_created_hh:
+                            h1_has_bearish=True
 
             direction=None
             if h4_bullish and h1_has_bullish:
@@ -857,7 +941,7 @@ def run_backtest_2tf():
             else:
                 prot=state_1h.protected_high or (price+15)
                 sl=prot + atr_v*0.5
-                if sl - price > 35: sl=price+25
+                if sl - price > 35: sl=price+30
                 if sl - price < 8: sl=price+10
                 risk=sl-price
                 tp1=price-risk*1.0; tp2=price-risk*2.0
@@ -893,6 +977,8 @@ def run_backtest_2tf():
                 "m15_bos":"N/A 2TF",
                 "protected":state_1h.protected_low if direction=="BUY" else state_1h.protected_high,
                 "important":state_1h.important_high if direction=="BUY" else state_1h.important_low,
+                "hl_correct": hl_that_created_hh,
+                "lh_correct": lh_that_created_ll,
             })
 
         total_closed=wins_tp1+wins_tp2+losses
@@ -906,7 +992,7 @@ def run_backtest_2tf():
 async def start(update, context):
     SUBSCRIBERS.add(update.effective_chat.id)
     td_status="✅ TwelveData ON" if TWELVE_KEY else "⚠️ OFF"
-    msg=f"🏆 GOLD VIP V5.3 KEEP + V5.5 FULL 2TF BOTH TRENDS FIXED 🏆\n\n💰 VIP: $25 / month\n📢 Channel: {CHANNEL_USERNAME}\n🆔 ID: {CHANNEL_ID}\n💳 Wallet: {CRYPTO_WALLET}\n{td_status}\n\nV5.3 KEEP - 3TF (H4→H1→NEW M15) - 38.7% win profitable:\n• 2-Left/2-Right High/Low, Protected+Important, Sweep vs BOS\n• CHoCH→Transition→HL/LH→BOS→Confirmed\n• H4→H1→NEW M15 chronological (must be AFTER H1)\n• SL: Protected + 0.3 ATR = $25 cap\n\nV5.5 FULL 2TF (4H+1H) - BOTH TRENDS FIXED:\n• 4H LL/LH: LH that created LL (Prot High) | HH/HL: HL that created HH (Prot Low)\n• 1H bullish must RETURN to 4H LH (HH touches LH within $50) / bearish RETURN to HL (within $50) - Gold volatile\n• 1H HL that created HH that went to 4H LH → Break + FORM BELOW = SELL (and reverse)\n• LOCATION: Entry must be 0-70% from LH/HL to LL/HH - Still around LH/HL ✅ Worth, both trends (was 55% too tight)\n• Form Above/Below + SL: Protected + 0.5 ATR $30 cap (was 0.3 $25) to avoid sweep losses - BOTH trends\n\nCommands:\n/signal - V5.3 3TF (H4→H1→M15)\n/signal2tf - V5.4 FULL 2TF with Return + Location + Form\n/backtest - V5.3 3TF\n/backtest2tf - V5.4 FULL 2TF backtest\n/mtf - States\n/bos - BOS/CHoCH/Sweeps"
+    msg=f"🏆 GOLD VIP V5.6 CORRECT MT5 BOTH TRENDS 🏆\n\n💰 VIP: $25 / month\n📢 Channel: {CHANNEL_USERNAME}\n🆔 ID: {CHANNEL_ID}\n💳 Wallet: {CRYPTO_WALLET}\n{td_status}\n\nV5.3 KEEP - 3TF (H4→H1→NEW M15) - 38.7% win profitable:\n• 2-Left/2-Right High/Low, Protected+Important, Sweep vs BOS\n• CHoCH→Transition→HL/LH→BOS→Confirmed\n• H4→H1→NEW M15 chronological (must be AFTER H1)\n• SL: Protected + 0.3 ATR = $25 cap\n\nV5.6 CORRECT MT5 (4H+1H) - BOTH TRENDS CORRECT LOGIC:\n• 4H LL/LH: LH that created LL (Prot High) | HH/HL: HL that created HH (Prot Low)\n• 1H bullish HH must RETURN to 4H LH within $50 → Find HL that created HH that went to LH → Break that HL + FORM BELOW (BOTH trends)\n• 1H HL that created HH that went to 4H LH → Break + FORM BELOW = SELL (and reverse)\n• LOCATION: Entry must be 0-70% from LH/HL to LL/HH - Still around LH/HL ✅ Worth, both trends (was 55% too tight)\n• SL BOTH: Protected + 0.5 ATR $30 cap (was 0.3 $25) to avoid sweep - CORRECT MT5 reading\n\nCommands:\n/signal - V5.3 3TF (H4→H1→M15)\n/signal2tf - V5.4 FULL 2TF with Return + Location + Form\n/backtest - V5.3 3TF\n/backtest2tf - V5.4 FULL 2TF backtest\n/mtf - States\n/bos - BOS/CHoCH/Sweeps"
     await update.message.reply_text(msg)
 
 async def buy(update, context):
@@ -1018,34 +1104,38 @@ async def backtest(update, context):
         losses=[t for t in result['all_trades'] if t['outcome']=="LOSS"][-10:]
         for t in losses:
             emoji="🟢" if t['dir']=="BUY" else "🔴"
-            msg+=f"{emoji} {t['mt5_time']} {t['dir']} ENTRY {t['entry']:.2f} SL {t['sl']:.2f} TP2 {t['tp2']:.2f} MaxH {t['max_high']:.2f} MinL {t['min_low']:.2f} -> LOSS\n"
+            tz = convert_timezones(t['mt5_time'])
+            msg+=f"{emoji} {tz['wat_short']} / {tz['mt5_short_gmt3']} {t['dir']} ENTRY {t['entry']:.2f} SL {t['sl']:.2f} TP2 {t['tp2']:.2f} MaxH {t['max_high']:.2f} MinL {t['min_low']:.2f} -> LOSS | UTC {t['mt5_time']}\n"
         msg+=f"\n🔍 Last 5 WINS:\n"
         wins=[t for t in result['all_trades'] if "WIN" in t['outcome']][-5:]
         for t in wins:
             emoji="🟢" if t['dir']=="BUY" else "🔴"
-            msg+=f"{emoji} {t['mt5_time']} {t['dir']} {t['entry']:.2f} -> {t['outcome']}\n"
+            tz = convert_timezones(t['mt5_time'])
+            msg+=f"{emoji} {tz['wat_short']} / {tz['mt5_short_gmt3']} {t['dir']} {t['entry']:.2f} -> {t['outcome']}\n"
         await update.message.reply_text(msg)
     except Exception as e:
         import traceback
         await update.message.reply_text(f"❌ Failed: {e}\n{traceback.format_exc()[:800]}")
 
 async def backtest2tf(update, context):
-    await update.message.reply_text("⏳ Running V5.5 FIXED BOTH TRENDS... Return $50 + Location 70% + SL 0.5 ATR...... Fetching 2000x 1H...")
+    await update.message.reply_text("⏳ Running V5.6 CORRECT MT5 BOTH TRENDS... Proper HL that created HH... Fetching 2000x 1H...")
     try:
         loop=asyncio.get_event_loop()
         result=await loop.run_in_executor(None, run_backtest_2tf)
         if "error" in result:
             await update.message.reply_text(f"❌ Error: {result['error']}\n{result.get('trace','')[:800]}"); return
-        msg=f"📊 V5.5 FIXED BOTH TRENDS BACKTEST 6M - RETURN $50 + LOCATION 70%\nCandles: {result['candles_used']} x 1H (~{result['candles_used']//24} days)\nTotal Setups: {result['total_signals']}\nClosed: {result['total_closed']}\n✅ TP2 WIN: {result['wins_tp2']}\n✅ TP1 WIN: {result['wins_tp1']}\n❌ LOSS: {result['losses']}\n➖ BE: {result['be']}\n\n🏆 WIN RATE: {result['win_rate']:.1f}% | TP2 RATE: {result['tp2_rate']:.1f}%\n\nV5.5 FIXED - BOTH TRENDS (IMPROVED):\n• BEARISH: 4H LH that created LL → 1H bullish HH must RETURN to 4H LH (within $50 Gold) → HL that created HH → Break + FORM BELOW\n• BULLISH: 4H HL that created HH → 1H bearish LL must RETURN to 4H HL (within $50 Gold) → LH that created LL → Break + FORM ABOVE\n• LOCATION: Entry must be 0-70% from LH/HL to LL/HH - Still around LH/HL ✅ Worth (was 55% too tight) + SL 0.5 ATR $30 cap to avoid sweep\n• Both trends same logic\n\n🔍 Last 10 LOSSES (V5.5 FIXED Both Trends - Return $50 + Location 70%):\n"
+        msg=f"📊 V5.6 CORRECT MT5 BOTH TRENDS BACKTEST - Proper HL/LH that created HH/LL\nCandles: {result['candles_used']} x 1H (~{result['candles_used']//24} days)\nTotal Setups: {result['total_signals']}\nClosed: {result['total_closed']}\n✅ TP2 WIN: {result['wins_tp2']}\n✅ TP1 WIN: {result['wins_tp1']}\n❌ LOSS: {result['losses']}\n➖ BE: {result['be']}\n\n🏆 WIN RATE: {result['win_rate']:.1f}% | TP2 RATE: {result['tp2_rate']:.1f}%\n\nV5.6 CORRECT - BOTH TRENDS (FIXES MT5 READING):\n• BEARISH: 4H LH 4647 → 1H HH 4669 touches LH → HL 4610 that created HH → Break HL 4610 + FORM BELOW (CORRECT)\n• BULLISH: 4H HL → 1H LL touches HL → LH that created LL → Break LH + FORM ABOVE (CORRECT)\n• LOCATION BOTH: Entry 0-70% from LH/HL to LL/HH - Still around LH/HL ✅ Worth (was 55% too tight) + SL 0.5 ATR $30 cap to avoid sweep\n• Both trends same logic\n\n🔍 Last 10 LOSSES (V5.6 CORRECT - Proper HL that created HH that went to LH):\n"
         losses=[t for t in result['all_trades'] if t['outcome']=="LOSS"][-10:]
         for t in losses:
             emoji="🟢" if t['dir']=="BUY" else "🔴"
-            msg+=f"{emoji} {t['mt5_time']} {t['dir']} ENTRY {t['entry']:.2f} SL {t['sl']:.2f} TP2 {t['tp2']:.2f} H4 {t['h4_state']} H1 {t['h1_state']} BOS {t['h1_bos']} @ {t['h1_bos_level']:.2f} -> LOSS | Prot {t['protected']:.2f}\n"
+            tz = convert_timezones(t['mt5_time'])
+            msg+=f"{emoji} {tz['wat_short']} / {tz['mt5_short_gmt3']} {t['dir']} ENTRY {t['entry']:.2f} SL {t['sl']:.2f} TP2 {t['tp2']:.2f} H4 {t['h4_state']} H1 {t['h1_state']} BOS {t['h1_bos']} @ {t['h1_bos_level']:.2f} -> LOSS | Prot {t['protected']:.2f} | UTC {t['mt5_time']}\n"
         msg+=f"\n🔍 Last 5 WINS:\n"
         wins=[t for t in result['all_trades'] if "WIN" in t['outcome']][-5:]
         for t in wins:
             emoji="🟢" if t['dir']=="BUY" else "🔴"
-            msg+=f"{emoji} {t['mt5_time']} {t['dir']} {t['entry']:.2f} -> {t['outcome']} | Prot {t['protected']:.2f}\n"
+            tz = convert_timezones(t['mt5_time'])
+            msg+=f"{emoji} {tz['wat_short']} / {tz['mt5_short_gmt3']} {t['dir']} {t['entry']:.2f} -> {t['outcome']} | Prot {t['protected']:.2f}\n"
         await update.message.reply_text(msg)
     except Exception as e:
         import traceback
