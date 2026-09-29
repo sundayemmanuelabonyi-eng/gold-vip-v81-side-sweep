@@ -759,7 +759,7 @@ def build_setup_2tf():
 def run_backtest_2tf():
     if not TWELVE_KEY: return {"error":"No TWELVE_DATA_API_KEY"}
     try:
-        print("Backtest V5.3 2TF FULL: Return to 4H LH/HL + Form + Location filter...")
+        print("Backtest V5.4 FULL: Return to 4H LH/HL + Form + Location (Both Trends)...")
         candles_1h=fetch_twelvedata_candles("XAU/USD","1h",TWELVE_KEY,2000)
         if not candles_1h or len(candles_1h)<200: return {"error":f"Failed fetch {len(candles_1h) if candles_1h else 0}"}
         trades=[]; wins_tp1=0; wins_tp2=0; losses=0; be=0
@@ -1030,13 +1030,13 @@ async def backtest(update, context):
         await update.message.reply_text(f"❌ Failed: {e}\n{traceback.format_exc()[:800]}")
 
 async def backtest2tf(update, context):
-    await update.message.reply_text("⏳ Running V5.3 2TF (4H+1H ONLY)... HL that created HH + 1H LH broken AND formed ABOVE/BELOW → Immediate entry... Fetching 2000x 1H...")
+    await update.message.reply_text("⏳ Running V5.4 FULL 2TF BOTH TRENDS... Return to 4H LH/HL + Form + Location Worth... Fetching 2000x 1H...")
     try:
         loop=asyncio.get_event_loop()
         result=await loop.run_in_executor(None, run_backtest_2tf)
         if "error" in result:
             await update.message.reply_text(f"❌ Error: {result['error']}\n{result.get('trace','')[:800]}"); return
-        msg=f"📊 V5.3 2TF BACKTEST 6M (4H+1H ONLY) - CORRECTED MUST FORM ABOVE/BELOW\nCandles: {result['candles_used']} x 1H (~{result['candles_used']//24} days)\nTotal Setups: {result['total_signals']}\nClosed: {result['total_closed']}\n✅ TP2 WIN: {result['wins_tp2']}\n✅ TP1 WIN: {result['wins_tp1']}\n❌ LOSS: {result['losses']}\n➖ BE: {result['be']}\n\n🏆 WIN RATE: {result['win_rate']:.1f}% | TP2 RATE: {result['tp2_rate']:.1f}%\n\nV5.3 2TF - CORRECTED:\n• 4H HH/HL → HL that created HH (Protected Low)\n• 4H LL/LH → LH that created LL (Protected High)\n• 1H LH broken AND bullish FORMED ABOVE it (close > level+0.5 AND price > level) → BUY\n• 1H HL broken AND bearish FORMED BELOW it (close < level-0.5 AND price < level) → SELL\n• No M15 wait → Faster, must form above/below\n\n🔍 Last 10 LOSSES (with FORM ABOVE/BELOW filter):\n"
+        msg=f"📊 V5.4 FULL 2TF BACKTEST 6M - BOTH TRENDS RETURN + LOCATION\nCandles: {result['candles_used']} x 1H (~{result['candles_used']//24} days)\nTotal Setups: {result['total_signals']}\nClosed: {result['total_closed']}\n✅ TP2 WIN: {result['wins_tp2']}\n✅ TP1 WIN: {result['wins_tp1']}\n❌ LOSS: {result['losses']}\n➖ BE: {result['be']}\n\n🏆 WIN RATE: {result['win_rate']:.1f}% | TP2 RATE: {result['tp2_rate']:.1f}%\n\nV5.4 FULL - BOTH TRENDS:\n• BEARISH: 4H LH that created LL → 1H bullish HH must RETURN to 4H LH (within $25) → HL that created HH → Break + FORM BELOW\n• BULLISH: 4H HL that created HH → 1H bearish LL must RETURN to 4H HL (within $25) → LH that created LL → Break + FORM ABOVE\n• LOCATION: Entry must be 0-55% from LH/HL to LL/HH - Still around LH/HL ✅ Worth, not too close to LL/HH\n• Both trends same logic\n\n🔍 Last 10 LOSSES (V5.4 FULL Both Trends):\n"
         losses=[t for t in result['all_trades'] if t['outcome']=="LOSS"][-10:]
         for t in losses:
             emoji="🟢" if t['dir']=="BUY" else "🔴"
