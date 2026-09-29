@@ -49,6 +49,25 @@ def get_current_times():
     now_utc = datetime.utcnow()
     return convert_timezones(now_utc.strftime("%Y-%m-%d %H:%M:%S"))
 
+def is_weekend_market_closed(utc_datetime_str):
+    """Check if market is closed on weekend - Gold XAUUSD closed Sat/Sun"""
+    try:
+        if isinstance(utc_datetime_str, str):
+            dt = datetime.strptime(utc_datetime_str, "%Y-%m-%d %H:%M:%S")
+        else:
+            dt = utc_datetime_str
+        # Saturday = 5, Sunday = 6
+        weekday = dt.weekday()
+        if weekday >= 5:  # Saturday or Sunday
+            return True, weekday
+        return False, weekday
+    except:
+        return False, 0
+
+def get_weekday_name(weekday_num):
+    names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    return names[weekday_num] if 0 <= weekday_num <= 6 else "Unknown"
+
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 class H(BaseHTTPRequestHandler):
@@ -302,6 +321,17 @@ def build_setup_v53():
     data=get_gold_v53()
     if not data:
         return "⚠️ No TwelveData", "⚠️ No data", "WAIT", 0, 0, 0,0,0,0,0,0
+    # WEEKEND FILTER
+    try:
+        is_wknd, wkday = is_weekend_market_closed(data["candles_1h"][-1]["datetime"] if data["candles_1h"] else "")
+        if is_wknd:
+            price_tmp=data["price"]
+            times_tmp=get_current_times()
+            wkday_name=get_weekday_name(wkday)
+            msg=f"🏖️ MARKET CLOSED - {wkday_name} - Gold XAUUSD closed weekend\n💰 ${price_tmp:.2f} | {times_tmp['wat_short']} | {times_tmp['mt5_short_gmt3']}\n\nNo trades on Saturday/Sunday"
+            return msg, msg, "WAIT", 0, 0, price_tmp, 0, 0, 0, 0, 0
+    except:
+        pass
     price=data["price"]
     s4h=data["state_4h"]; s1h=data["state_1h"]; s15m=data["state_15m"]
     
@@ -314,6 +344,15 @@ def build_setup_v53():
             trs.append(tr)
         return sum(trs[-14:])/14
     atr_15m=calc_atr(data["candles_15m"])
+
+    # WEEKEND FILTER - Market closed Saturday/Sunday - No trades
+    is_weekend, weekday = is_weekend_market_closed(data["candles_1h"][-1]["datetime"] if data["candles_1h"] else "")
+    if is_weekend:
+        weekday_name = get_weekday_name(weekday)
+        price = data["price"]
+        times = get_current_times()
+        msg = f"🏖️ MARKET CLOSED - {weekday_name} - Gold XAUUSD closed weekend\n💰 ${price:.2f} | {times['wat_short']} | {times['mt5_short_gmt3']}\n\nNo trades on Saturday/Sunday - Market closed\nWait for Monday open"
+        return msg, msg, "WAIT", 0, 0, price, 0, 0, 0, 0, 0
 
     h4_context=s4h.state
     h4_bullish = h4_context=="BULLISH"
@@ -432,6 +471,13 @@ def build_setup_v53():
 
     return "\n".join(lines), "\n".join(vip_lines), direction, conf, count, price, sl, tp1, tp2, tp3, risk
 
+def is_weekend_filter(dt_str):
+    try:
+        dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+        return dt.weekday() >= 5
+    except:
+        return False
+
 def run_backtest_v53():
     if not TWELVE_KEY: return {"error":"No TWELVE_DATA_API_KEY"}
     try:
@@ -443,6 +489,22 @@ def run_backtest_v53():
         for i in range(100, len(candles_1h)-30, 1):
             hist_1h=candles_1h[:i]
             if len(hist_1h)<100: continue
+            # WEEKEND FILTER - Skip Saturday/Sunday
+            try:
+                dt_str = hist_1h[-1]["datetime"]
+                dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+                if dt.weekday() >= 5:
+                    continue
+            except:
+                pass
+            # WEEKEND FILTER - Skip Saturday/Sunday trades - Market closed
+            try:
+                dt_str = hist_1h[-1]["datetime"]
+                dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+                if dt.weekday() >= 5:  # Saturday=5, Sunday=6
+                    continue  # Skip weekend - market closed
+            except:
+                pass
             state_1h=build_structure_state(hist_1h)
             hist_4h=hist_1h[::4]
             state_4h=build_structure_state(hist_4h)
@@ -575,6 +637,15 @@ def build_setup_2tf():
             trs.append(tr)
         return sum(trs[-14:])/14
     atr_1h=calc_atr(data["candles_1h"])
+
+    # WEEKEND FILTER - Market closed Saturday/Sunday - No trades
+    is_weekend, weekday = is_weekend_market_closed(data["candles_1h"][-1]["datetime"] if data["candles_1h"] else "")
+    if is_weekend:
+        weekday_name = get_weekday_name(weekday)
+        price = data["price"]
+        times = get_current_times()
+        msg = f"🏖️ MARKET CLOSED - {weekday_name} - Gold XAUUSD closed weekend\n💰 ${price:.2f} | {times['wat_short']} | {times['mt5_short_gmt3']}\n\nNo trades on Saturday/Sunday - Market closed\nWait for Monday open"
+        return msg, msg, "WAIT", 0, 0, price, 0, 0, 0, 0, 0
 
     h4_context=s4h.state
     h4_bullish = h4_context=="BULLISH"
@@ -816,6 +887,14 @@ def run_backtest_2tf():
         for i in range(100, len(candles_1h)-30, 1):
             hist_1h=candles_1h[:i]
             if len(hist_1h)<100: continue
+            # WEEKEND FILTER - Skip Saturday/Sunday trades - Market closed
+            try:
+                dt_str = hist_1h[-1]["datetime"]
+                dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+                if dt.weekday() >= 5:  # Saturday=5, Sunday=6
+                    continue  # Skip weekend - market closed
+            except:
+                pass
             state_1h=build_structure_state(hist_1h)
             hist_4h=hist_1h[::4]
             state_4h=build_structure_state(hist_4h)
