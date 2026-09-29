@@ -777,7 +777,7 @@ def run_backtest_2tf():
 async def start(update, context):
     SUBSCRIBERS.add(update.effective_chat.id)
     td_status="✅ TwelveData ON" if TWELVE_KEY else "⚠️ OFF"
-    msg=f"🏆 GOLD VIP V5.3 FINAL KEEP + 2TF 🏆\n\n💰 VIP: $25 / month\n📢 Channel: {CHANNEL_USERNAME}\n🆔 ID: {CHANNEL_ID}\n💳 Wallet: {CRYPTO_WALLET}\n{td_status}\n\nV5.3 KEEP - 3TF (H4→H1→NEW M15) - 38.7% win profitable:\n• 2-Left/2-Right High/Low, Protected+Important, Sweep vs BOS\n• CHoCH→Transition→HL/LH→BOS→Confirmed\n• H4→H1→NEW M15 chronological (must be AFTER H1)\n• SL: Protected + 0.3 ATR = $25 cap\n\nV5.3 2TF (4H+1H ONLY) - YOUR NEW REQUEST:\n• 4H HH/HL → HL that created HH → 1H LH broken by bullish BOS above it → BUY immediate\n• 4H LL/LH → LH that created LL → 1H HL broken by bearish BOS below it → SELL immediate\n• Faster signals, more trades, no M15 wait\n\nCommands:\n/signal - V5.3 3TF (H4→H1→M15) signal\n/signal2tf - V5.3 2TF (4H+1H ONLY) signal ← NEW!\n/backtest - V5.3 3TF backtest\n/backtest2tf - V5.3 2TF backtest ← NEW!\n/mtf - States\n/bos - BOS/CHoCH/Sweeps"
+    msg=f"🏆 GOLD VIP V5.3 FINAL KEEP + 2TF CORRECTED 🏆\n\n💰 VIP: $25 / month\n📢 Channel: {CHANNEL_USERNAME}\n🆔 ID: {CHANNEL_ID}\n💳 Wallet: {CRYPTO_WALLET}\n{td_status}\n\nV5.3 KEEP - 3TF (H4→H1→NEW M15) - 38.7% win profitable:\n• 2-Left/2-Right High/Low, Protected+Important, Sweep vs BOS\n• CHoCH→Transition→HL/LH→BOS→Confirmed\n• H4→H1→NEW M15 chronological (must be AFTER H1)\n• SL: Protected + 0.3 ATR = $25 cap\n\nV5.3 2TF (4H+1H ONLY) - CORRECTED MUST FORM ABOVE/BELOW:\n• 4H HH/HL → HL that created HH (Protected Low)\n• 4H LL/LH → LH that created LL (Protected High)\n• 1H LH broken AND bullish FORMED ABOVE it (close > level+0.5 AND price > level) → BUY\n• 1H HL broken AND bearish FORMED BELOW it (close < level-0.5 AND price < level) → SELL\n• Faster signals, must form above/below, no M15 wait\n\nCommands:\n/signal - V5.3 3TF (H4→H1→M15) signal\n/signal2tf - V5.3 2TF (4H+1H ONLY) CORRECTED signal ← NEW!\n/backtest - V5.3 3TF backtest\n/backtest2tf - V5.3 2TF CORRECTED backtest ← NEW!\n/mtf - States\n/bos - BOS/CHoCH/Sweeps"
     await update.message.reply_text(msg)
 
 async def buy(update, context):
@@ -901,13 +901,13 @@ async def backtest(update, context):
         await update.message.reply_text(f"❌ Failed: {e}\n{traceback.format_exc()[:800]}")
 
 async def backtest2tf(update, context):
-    await update.message.reply_text("⏳ Running V5.3 2TF (4H+1H ONLY)... HL that created HH + 1H LH broken by BOS → Immediate entry... Fetching 2000x 1H...")
+    await update.message.reply_text("⏳ Running V5.3 2TF (4H+1H ONLY)... HL that created HH + 1H LH broken AND formed ABOVE/BELOW → Immediate entry... Fetching 2000x 1H...")
     try:
         loop=asyncio.get_event_loop()
         result=await loop.run_in_executor(None, run_backtest_2tf)
         if "error" in result:
             await update.message.reply_text(f"❌ Error: {result['error']}\n{result.get('trace','')[:800]}"); return
-        msg=f"📊 V5.3 2TF BACKTEST 6M (4H+1H ONLY)\nCandles: {result['candles_used']} x 1H (~{result['candles_used']//24} days)\nTotal Setups: {result['total_signals']}\nClosed: {result['total_closed']}\n✅ TP2 WIN: {result['wins_tp2']}\n✅ TP1 WIN: {result['wins_tp1']}\n❌ LOSS: {result['losses']}\n➖ BE: {result['be']}\n\n🏆 WIN RATE: {result['win_rate']:.1f}% | TP2 RATE: {result['tp2_rate']:.1f}%\n\nV5.3 2TF - 4H+1H ONLY:\n• 4H HH/HL → HL that created HH (Protected Low)\n• 4H LL/LH → LH that created LL (Protected High)\n• 1H LH broken by bullish BOS → BUY immediate\n• 1H HL broken by bearish BOS → SELL immediate\n• No M15 wait → Faster, more trades\n\n🔍 Last 10 LOSSES:\n"
+        msg=f"📊 V5.3 2TF BACKTEST 6M (4H+1H ONLY) - CORRECTED MUST FORM ABOVE/BELOW\nCandles: {result['candles_used']} x 1H (~{result['candles_used']//24} days)\nTotal Setups: {result['total_signals']}\nClosed: {result['total_closed']}\n✅ TP2 WIN: {result['wins_tp2']}\n✅ TP1 WIN: {result['wins_tp1']}\n❌ LOSS: {result['losses']}\n➖ BE: {result['be']}\n\n🏆 WIN RATE: {result['win_rate']:.1f}% | TP2 RATE: {result['tp2_rate']:.1f}%\n\nV5.3 2TF - CORRECTED:\n• 4H HH/HL → HL that created HH (Protected Low)\n• 4H LL/LH → LH that created LL (Protected High)\n• 1H LH broken AND bullish FORMED ABOVE it (close > level+0.5 AND price > level) → BUY\n• 1H HL broken AND bearish FORMED BELOW it (close < level-0.5 AND price < level) → SELL\n• No M15 wait → Faster, must form above/below\n\n🔍 Last 10 LOSSES (with FORM ABOVE/BELOW filter):\n"
         losses=[t for t in result['all_trades'] if t['outcome']=="LOSS"][-10:]
         for t in losses:
             emoji="🟢" if t['dir']=="BUY" else "🔴"
