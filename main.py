@@ -532,49 +532,142 @@ def build_setup_2tf():
     h4_bullish = h4_context=="BULLISH"
     h4_bearish = h4_context=="BEARISH"
 
-    # 2TF Logic: H4 trend making HH/LL, wait for return to HL/LH that created HH/LL, then 1H break + FORM above/below
+    # ===== FULL CORRECT 2TF LOGIC WITH RETURN + LOCATION FILTER (YOUR REQUEST) =====
+    # 4H: HH/HL → HL that created HH (Prot Low) | LL/LH → LH that created LL (Prot High)
+    # 1H: Bullish trend must RETURN to that 4H LH/HL, make HH/LL that touches 4H LH/HL
+    #     HL that created that 1H HH/LL → Wait for 1H bearish/bullish break + FORM below/above that HL/LH
+    # LOCATION: Confirm entry must still be around 4H LH/HL, not too close to 4H LL/HH → Worth trade?
+    
+    h4_lh = s4h.protected_high  # For BEARISH: LH that created LL
+    h4_ll = s4h.important_low or s4h.protected_low  # For BEARISH: LL
+    h4_hl = s4h.protected_low  # For BULLISH: HL that created HH
+    h4_hh = s4h.important_high or s4h.protected_high  # For BULLISH: HH
+    
+    # Check 1H return to 4H level in recent candles
+    candles_1h = data["candles_1h"]
+    h1_returned_to_4h_lh = False
+    h1_returned_to_4h_hl = False
+    h1_hh_that_touched_4h_lh = None
+    h1_ll_that_touched_4h_hl = None
+    
+    if candles_1h and len(candles_1h) >= 20:
+        recent_20 = candles_1h[-20:]
+        recent_high = max(c["high"] for c in recent_20)
+        recent_low = min(c["low"] for c in recent_20)
+        # BEARISH: Did 1H bullish make HH that went to 4H LH? Within $25 of LH
+        if h4_lh and h4_ll:
+            if recent_high >= h4_lh - 25 and recent_high <= h4_lh + 15:
+                h1_returned_to_4h_lh = True
+                h1_hh_that_touched_4h_lh = recent_high
+        # BULLISH: Did 1H bearish make LL that went to 4H HL? Within $25 of HL
+        if h4_hl and h4_hh:
+            if recent_low <= h4_hl + 25 and recent_low >= h4_hl - 15:
+                h1_returned_to_4h_hl = True
+                h1_ll_that_touched_4h_hl = recent_low
+    
     h1_has_bullish_bos=False; h1_has_bearish_bos=False
     h1_bullish_formed_above=False; h1_bearish_formed_below=False
     h1_last_bos_time=s1h.last_bos["datetime"] if s1h.last_bos else None
     h1_last_bos_level=s1h.last_bos["level"] if s1h.last_bos else None
     h1_last_bos_price=s1h.last_bos["price"] if s1h.last_bos else None
     
+    # Location check: Is entry still around 4H LH/HL or too close to 4H LL/HH?
+    location_worth = False
+    location_msg = ""
+    location_pct = 0
+    
     if s1h.state=="BULLISH" and s1h.last_bos and s1h.last_bos["type"]=="BULLISH_BOS":
-        # Must break AND form above the LH that was broken
-        level=s1h.last_bos["level"]  # This is the LH that was broken
-        bos_price=s1h.last_bos["price"]  # Close that broke it
-        # Check: BOS close above level + current price still above level (formed above)
-        if bos_price and level and bos_price > level and price > level:
-            # Also check candle formed above: close above level by at least 0.5
-            if bos_price > level + 0.5:
+        level=s1h.last_bos["level"]
+        bos_price=s1h.last_bos["price"]
+        if bos_price and level and bos_price > level and price > level and bos_price > level + 0.5:
+            # Location for BUY: Entry should be around 4H HL, not too close to 4H HH
+            if h4_hl and h4_hh and h4_hh > h4_hl:
+                range_4h = h4_hh - h4_hl
+                if range_4h > 20:  # Valid range
+                    dist_from_hl = price - h4_hl
+                    location_pct = (dist_from_hl / range_4h) * 100
+                    # Good if within 0-50% from HL (near HL), bad if >60% close to HH
+                    if dist_from_hl >= 0 and location_pct <= 55:
+                        location_worth = True
+                        location_msg = f"Entry {price:.2f} is {location_pct:.0f}% from 4H HL {h4_hl:.2f} to HH {h4_hh:.2f} - Still around HL ✅ Worth"
+                    else:
+                        location_msg = f"Entry {price:.2f} is {location_pct:.0f}% from HL to HH - Too close to HH {h4_hh:.2f} ❌ Not worth (overextended)"
+                else:
+                    location_worth = True
+                    location_msg = f"Range small {range_4h:.1f}, location OK"
+            else:
+                location_worth = True
+            
+            if location_worth:
                 h1_has_bullish_bos=True
                 h1_bullish_formed_above=True
+
     if s1h.state=="BEARISH" and s1h.last_bos and s1h.last_bos["type"]=="BEARISH_BOS":
-        # Must break AND form below the HL that was broken
-        level=s1h.last_bos["level"]  # This is the HL that was broken
+        level=s1h.last_bos["level"]
         bos_price=s1h.last_bos["price"]
-        if bos_price and level and bos_price < level and price < level:
-            if bos_price < level - 0.5:
+        if bos_price and level and bos_price < level and price < level and bos_price < level - 0.5:
+            # Location for SELL: Entry should be around 4H LH, not too close to 4H LL
+            if h4_lh and h4_ll and h4_lh > h4_ll:
+                range_4h = h4_lh - h4_ll
+                if range_4h > 20:
+                    dist_from_lh = h4_lh - price
+                    location_pct = (dist_from_lh / range_4h) * 100
+                    # Good if within 0-50% from LH (near LH), bad if >60% close to LL
+                    if dist_from_lh >= 0 and location_pct <= 55:
+                        location_worth = True
+                        location_msg = f"Entry {price:.2f} is {location_pct:.0f}% from 4H LH {h4_lh:.2f} to LL {h4_ll:.2f} - Still around LH ✅ Worth"
+                    else:
+                        location_msg = f"Entry {price:.2f} is {location_pct:.0f}% from LH to LL - Too close to LL {h4_ll:.2f} ❌ Not worth (overextended, no RR)"
+                else:
+                    location_worth = True
+                    location_msg = f"Range small {range_4h:.1f}, location OK"
+            else:
+                location_worth = True
+            
+            if location_worth:
                 h1_has_bearish_bos=True
                 h1_bearish_formed_below=True
 
     direction="WAIT"; conf=0; count=0; setup_type="NONE"
-    # BULLISH: 4H HH/HL -> HL that created HH -> 1H bearish LH broken AND bullish formed ABOVE it -> BUY immediately
+    
+    # FULL LOGIC CHECK
     if h4_bullish and h1_has_bullish_bos and h1_bullish_formed_above:
-        direction="BUY"; conf=90; count=2; setup_type=f"BULLISH 2TF: 4H HH/HL → HL that created HH ({s4h.protected_low or 0:.2f}) → 1H LH {h1_last_bos_level or 0:.2f} broken AND bullish formed ABOVE it @ {h1_last_bos_price or 0:.2f} → BUY continuation"
+        if h1_returned_to_4h_hl:
+            direction="BUY"; conf=90; count=2
+            setup_type=f"BULLISH 2TF FULL: 4H HH/HL (HL {h4_hl or 0:.2f} created HH) → 1H bearish LL {h1_ll_that_touched_4h_hl or 0:.2f} touched 4H HL → 1H LH {h1_last_bos_level or 0:.2f} broken AND formed ABOVE @ {h1_last_bos_price or 0:.2f} → BUY | {location_msg}"
+        else:
+            setup_type=f"No 2TF - 1H bearish did NOT return to 4H HL {h4_hl or 0:.2f} yet (recent low {min(c['low'] for c in candles_1h[-20:]) if candles_1h and len(candles_1h)>=20 else 0:.2f}) - Waiting for return to 4H HL"
+    
     elif h4_bearish and h1_has_bearish_bos and h1_bearish_formed_below:
-        direction="SELL"; conf=90; count=2; setup_type=f"BEARISH 2TF: 4H LL/LH → LH that created LL ({s4h.protected_high or 0:.2f}) → 1H HL {h1_last_bos_level or 0:.2f} broken AND bearish formed BELOW it @ {h1_last_bos_price or 0:.2f} → SELL continuation"
+        if h1_returned_to_4h_lh:
+            direction="SELL"; conf=90; count=2
+            setup_type=f"BEARISH 2TF FULL: 4H LL/LH (LH {h4_lh or 0:.2f} created LL {h4_ll or 0:.2f}) → 1H bullish HH {h1_hh_that_touched_4h_lh or 0:.2f} touched 4H LH → 1H HL {h1_last_bos_level or 0:.2f} (HL that created HH that went to 4H LH) broken AND formed BELOW @ {h1_last_bos_price or 0:.2f} → SELL | {location_msg}"
+        else:
+            setup_type=f"No 2TF - 1H bullish did NOT return to 4H LH {h4_lh or 0:.2f} yet (recent high {max(c['high'] for c in candles_1h[-20:]) if candles_1h and len(candles_1h)>=20 else 0:.2f}) - Waiting for return to 4H LH that created LL"
+    
     elif h1_has_bullish_bos and h1_bullish_formed_above and h4_context!="BEARISH":
-        direction="BUY"; conf=80; count=2; setup_type=f"2TF: H1 LH {h1_last_bos_level or 0:.2f} broken AND bullish formed ABOVE it @ {h1_last_bos_price or 0:.2f} → BUY (H4 not opposing)"
+        if h1_returned_to_4h_hl:
+            direction="BUY"; conf=80; count=2
+            setup_type=f"2TF: 1H LL touched 4H HL {h4_hl or 0:.2f} → LH {h1_last_bos_level or 0:.2f} broken AND formed ABOVE → BUY | {location_msg}"
+        else:
+            setup_type=f"2TF: LH broken but 1H did NOT return to 4H HL yet - {location_msg}"
+    
     elif h1_has_bearish_bos and h1_bearish_formed_below and h4_context!="BULLISH":
-        direction="SELL"; conf=80; count=2; setup_type=f"2TF: H1 HL {h1_last_bos_level or 0:.2f} broken AND bearish formed BELOW it @ {h1_last_bos_price or 0:.2f} → SELL (H4 not opposing)"
+        if h1_returned_to_4h_lh:
+            direction="SELL"; conf=80; count=2
+            setup_type=f"2TF: 1H HH touched 4H LH {h4_lh or 0:.2f} → HL {h1_last_bos_level or 0:.2f} broken AND formed BELOW → SELL | {location_msg}"
+        else:
+            setup_type=f"2TF: HL broken but 1H did NOT return to 4H LH yet - {location_msg}"
+    
     else:
         if s1h.last_bos and s1h.last_bos["type"]=="BULLISH_BOS" and not h1_bullish_formed_above:
-            setup_type=f"No 2TF - 1H LH {h1_last_bos_level or 0:.2f} broken but NOT formed above it yet (price {price:.2f} must be ABOVE) - Waiting to FORM ABOVE"
+            setup_type=f"No 2TF - 1H LH {h1_last_bos_level or 0:.2f} broken but NOT formed above yet (price {price:.2f} must be ABOVE) - Waiting to FORM ABOVE | {location_msg}"
         elif s1h.last_bos and s1h.last_bos["type"]=="BEARISH_BOS" and not h1_bearish_formed_below:
-            setup_type=f"No 2TF - 1H HL {h1_last_bos_level or 0:.2f} broken but NOT formed below it yet (price {price:.2f} must be BELOW) - Waiting to FORM BELOW"
+            setup_type=f"No 2TF - 1H HL {h1_last_bos_level or 0:.2f} broken but NOT formed below yet (price {price:.2f} must be BELOW) - Waiting to FORM BELOW | {location_msg}"
+        elif s1h.last_bos and (h1_bullish_formed_above or h1_bearish_formed_below) and not location_worth:
+            setup_type=f"No 2TF - {location_msg} - Entry too close to 4H LL/HH, not worth trade"
         else:
-            setup_type="No 2TF setup - Waiting for H4 trend + H1 BOS break AND form above/below LH/HL"
+            setup_type="No 2TF setup - Waiting for: 1H return to 4H LH/HL that created LL/HH → 1H HH/LL touches 4H LH/HL → HL/LH that created that HH/LL broken AND formed below/above → Location still around 4H LH/HL"
 
     # SL same as V5.3 KEEP: Protected + 0.3 ATR $25 cap
     if direction=="BUY":
@@ -666,7 +759,7 @@ def build_setup_2tf():
 def run_backtest_2tf():
     if not TWELVE_KEY: return {"error":"No TWELVE_DATA_API_KEY"}
     try:
-        print("Backtest V5.3 2TF (4H+1H ONLY): HL that created HH + LH broken by BOS...")
+        print("Backtest V5.3 2TF FULL: Return to 4H LH/HL + Form + Location filter...")
         candles_1h=fetch_twelvedata_candles("XAU/USD","1h",TWELVE_KEY,2000)
         if not candles_1h or len(candles_1h)<200: return {"error":f"Failed fetch {len(candles_1h) if candles_1h else 0}"}
         trades=[]; wins_tp1=0; wins_tp2=0; losses=0; be=0
@@ -680,25 +773,61 @@ def run_backtest_2tf():
 
             h4_bullish=state_4h.state=="BULLISH"; h4_bearish=state_4h.state=="BEARISH"
             h1_has_bullish=False; h1_has_bearish=False
-            # Must break AND form above/below
+            
+            h4_lh = state_4h.protected_high
+            h4_ll = state_4h.important_low or state_4h.protected_low
+            h4_hl = state_4h.protected_low
+            h4_hh = state_4h.important_high or state_4h.protected_high
+            
+            h1_returned_to_lh=False; h1_returned_to_hl=False
+            if len(hist_1h)>=20:
+                recent_20=hist_1h[-20:]
+                recent_high=max(c["high"] for c in recent_20)
+                recent_low=min(c["low"] for c in recent_20)
+                if h4_lh and h4_ll and h4_lh > h4_ll:
+                    if recent_high >= h4_lh - 25 and recent_high <= h4_lh + 15:
+                        h1_returned_to_lh=True
+                if h4_hl and h4_hh and h4_hh > h4_hl:
+                    if recent_low <= h4_hl + 25 and recent_low >= h4_hl - 15:
+                        h1_returned_to_hl=True
+            
+            price_now=hist_1h[-1]["close"]
+            
             if state_1h.state=="BULLISH" and state_1h.last_bos and state_1h.last_bos["type"]=="BULLISH_BOS":
-                level=state_1h.last_bos["level"]
-                bos_price=state_1h.last_bos["price"]
-                price_now=hist_1h[-1]["close"]
+                level=state_1h.last_bos["level"]; bos_price=state_1h.last_bos["price"]
                 if bos_price and level and bos_price > level + 0.5 and price_now > level:
-                    h1_has_bullish=True  # Broken AND formed above
+                    if h4_hl and h4_hh and h4_hh > h4_hl:
+                        range_4h=h4_hh - h4_hl
+                        if range_4h>20:
+                            dist=price_now - h4_hl; pct=(dist/range_4h)*100
+                            if dist>=0 and pct<=55 and h1_returned_to_hl:
+                                h1_has_bullish=True
+                        else:
+                            if h1_returned_to_hl:
+                                h1_has_bullish=True
+                    else:
+                        h1_has_bullish=True
+            
             if state_1h.state=="BEARISH" and state_1h.last_bos and state_1h.last_bos["type"]=="BEARISH_BOS":
-                level=state_1h.last_bos["level"]
-                bos_price=state_1h.last_bos["price"]
-                price_now=hist_1h[-1]["close"]
+                level=state_1h.last_bos["level"]; bos_price=state_1h.last_bos["price"]
                 if bos_price and level and bos_price < level - 0.5 and price_now < level:
-                    h1_has_bearish=True  # Broken AND formed below
+                    if h4_lh and h4_ll and h4_lh > h4_ll:
+                        range_4h=h4_lh - h4_ll
+                        if range_4h>20:
+                            dist=h4_lh - price_now; pct=(dist/range_4h)*100
+                            if dist>=0 and pct<=55 and h1_returned_to_lh:
+                                h1_has_bearish=True
+                        else:
+                            if h1_returned_to_lh:
+                                h1_has_bearish=True
+                    else:
+                        h1_has_bearish=True
 
             direction=None
             if h4_bullish and h1_has_bullish:
-                direction="BUY"  # 4H HH/HL -> HL that created HH -> 1H LH broken AND formed ABOVE it
+                direction="BUY"
             elif h4_bearish and h1_has_bearish:
-                direction="SELL"  # 4H LL/LH -> LH that created LL -> 1H HL broken AND formed BELOW it
+                direction="SELL"
             elif h1_has_bullish and state_4h.state!="BEARISH":
                 direction="BUY"
             elif h1_has_bearish and state_4h.state!="BULLISH":
@@ -777,7 +906,7 @@ def run_backtest_2tf():
 async def start(update, context):
     SUBSCRIBERS.add(update.effective_chat.id)
     td_status="✅ TwelveData ON" if TWELVE_KEY else "⚠️ OFF"
-    msg=f"🏆 GOLD VIP V5.3 FINAL KEEP + 2TF CORRECTED 🏆\n\n💰 VIP: $25 / month\n📢 Channel: {CHANNEL_USERNAME}\n🆔 ID: {CHANNEL_ID}\n💳 Wallet: {CRYPTO_WALLET}\n{td_status}\n\nV5.3 KEEP - 3TF (H4→H1→NEW M15) - 38.7% win profitable:\n• 2-Left/2-Right High/Low, Protected+Important, Sweep vs BOS\n• CHoCH→Transition→HL/LH→BOS→Confirmed\n• H4→H1→NEW M15 chronological (must be AFTER H1)\n• SL: Protected + 0.3 ATR = $25 cap\n\nV5.3 2TF (4H+1H ONLY) - CORRECTED MUST FORM ABOVE/BELOW:\n• 4H HH/HL → HL that created HH (Protected Low)\n• 4H LL/LH → LH that created LL (Protected High)\n• 1H LH broken AND bullish FORMED ABOVE it (close > level+0.5 AND price > level) → BUY\n• 1H HL broken AND bearish FORMED BELOW it (close < level-0.5 AND price < level) → SELL\n• Faster signals, must form above/below, no M15 wait\n\nCommands:\n/signal - V5.3 3TF (H4→H1→M15) signal\n/signal2tf - V5.3 2TF (4H+1H ONLY) CORRECTED signal ← NEW!\n/backtest - V5.3 3TF backtest\n/backtest2tf - V5.3 2TF CORRECTED backtest ← NEW!\n/mtf - States\n/bos - BOS/CHoCH/Sweeps"
+    msg=f"🏆 GOLD VIP V5.3 FINAL KEEP + V5.4 FULL 2TF 🏆\n\n💰 VIP: $25 / month\n📢 Channel: {CHANNEL_USERNAME}\n🆔 ID: {CHANNEL_ID}\n💳 Wallet: {CRYPTO_WALLET}\n{td_status}\n\nV5.3 KEEP - 3TF (H4→H1→NEW M15) - 38.7% win profitable:\n• 2-Left/2-Right High/Low, Protected+Important, Sweep vs BOS\n• CHoCH→Transition→HL/LH→BOS→Confirmed\n• H4→H1→NEW M15 chronological (must be AFTER H1)\n• SL: Protected + 0.3 ATR = $25 cap\n\nV5.4 FULL 2TF (4H+1H) - YOUR FULL REQUEST:\n• 4H LL/LH: LH that created LL (Prot High) | HH/HL: HL that created HH (Prot Low)\n• 1H bullish must RETURN to 4H LH (HH touches LH within $25) / bearish RETURN to HL\n• 1H HL that created HH that went to 4H LH → Break + FORM BELOW = SELL (and reverse)\n• LOCATION filter: Entry must be still around 4H LH (0-55% from LH to LL) not too close to LL = Worth trade?\n• Form Above/Below: close > level+0.5 AND price > level\n\nCommands:\n/signal - V5.3 3TF (H4→H1→M15)\n/signal2tf - V5.4 FULL 2TF with Return + Location + Form\n/backtest - V5.3 3TF\n/backtest2tf - V5.4 FULL 2TF backtest\n/mtf - States\n/bos - BOS/CHoCH/Sweeps"
     await update.message.reply_text(msg)
 
 async def buy(update, context):
